@@ -24,7 +24,7 @@
         programs.pidr.package = self.packages.${system}.default;
         home.packages = lib.mkIf config.programs.pidr.enable [ config.programs.pidr.package ];
         home.file = {
-          ".pi/agent/auth.json" = pkgs.writeText "auth.json" (lib.generators.toJSON {} config.programs.pidr.auth)
+          ".pi/agent/auth.json".source = pkgs.writeText "auth.json" (lib.generators.toJSON {} config.programs.pidr.auth);
         };
       };
     };
