@@ -10,8 +10,8 @@
  *      (supports pi's "!command" convention: the key is the output of a shell command)
  *
  * Usage data comes from https://api.z.ai/api/monitor/usage/quota/limit
- * (the same endpoint official z.ai tooling uses) and is refreshed every
- * 5 minutes, plus on demand via the /zai-usage command.
+ * (the same endpoint official z.ai tooling uses) and is refreshed after each
+ * completed agent run, plus on demand via the /zai-usage command.
  */
 
 import { execSync } from "node:child_process";
@@ -21,7 +21,6 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-const REFRESH_MS = 5 * 60 * 1000;
 const BASE_URL = "https://api.z.ai";
 
 interface ZaiLimit {
@@ -125,18 +124,25 @@ function usageColor(percent: number): "success" | "warning" | "error" {
 
 export default function (pi: ExtensionAPI) {
 	let usage: ZaiUsage | undefined;
-	let timer: ReturnType<typeof setInterval> | undefined;
+	let apiKey: string | undefined;
 	let requestRender: (() => void) | undefined;
+	let refreshPending = false;
 
-	async function refresh(apiKey: string) {
-		usage = await fetchUsage(apiKey);
-		if (usage.error) console.warn(`[zai-usage] ${usage.error}`);
-		requestRender?.();
+	async function refresh() {
+		if (!apiKey || refreshPending) return;
+		refreshPending = true;
+		try {
+			usage = await fetchUsage(apiKey);
+			if (usage.error) console.warn(`[zai-usage] ${usage.error}`);
+			requestRender?.();
+		} finally {
+			refreshPending = false;
+		}
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		const apiKey = resolveApiKey();
-		if (!apiKey) {
+		const key = resolveApiKey();
+		if (!key) {
 			ctx.ui.setStatus?.("zai-usage", ctx.ui.theme.fg("error", "zai-usage: no API key (set ZAI_API_KEY)"));
 			return;
 		}
@@ -187,10 +193,15 @@ export default function (pi: ExtensionAPI) {
 			});
 		}
 
-		refresh(apiKey); // initial fetch, fire and forget
-		if (timer) clearInterval(timer);
-		timer = setInterval(() => refresh(apiKey), REFRESH_MS);
-		timer.unref?.();
+		apiKey = key;
+
+		refresh(); // initial fetch, fire and forget
+	});
+
+	// Refresh usage after each completed agent run so idle sessions make no
+	// background requests at all.
+	pi.on("agent_end", async () => {
+		refresh();
 	});
 
 	pi.registerCommand("zai-usage", {
@@ -221,8 +232,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
-		if (timer) clearInterval(timer);
-		timer = undefined;
+		apiKey = undefined;
 		requestRender = undefined;
 	});
 }
