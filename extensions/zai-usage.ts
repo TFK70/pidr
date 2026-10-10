@@ -86,7 +86,7 @@ const UNITS: Record<string, string> = {
 	"3": "h",
 	"4": "d",
 	"5": "w",
-	"6": "mo",
+	"6": "w",
 };
 
 function parseQuota(body: any, now: number): ZaiUsage {
