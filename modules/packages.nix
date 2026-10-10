@@ -14,6 +14,7 @@
     let
       bundledExtensions = [
         "${self}/extensions/zai-usage.ts"
+        "${self}/extensions/askuserquestion"
       ];
 
       pi = inputs.pi-coding-agent.packages.${pkgs.stdenv.hostPlatform.system}.default;
