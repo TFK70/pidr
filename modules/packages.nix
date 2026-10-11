@@ -13,7 +13,7 @@
     { pkgs, ... }:
     let
       bundledExtensions = [
-        "${self}/extensions/zai-usage.ts"
+        "${self}/extensions/pidr-footer.ts"
         "${self}/extensions/askuserquestion"
       ];
 

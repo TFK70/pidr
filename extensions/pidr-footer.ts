@@ -1,10 +1,11 @@
 /**
- * Z.ai coding plan status footer
+ * pidr custom TUI footer
  *
  * Replaces the default footer with a minimal line showing only:
  *   current dir | model | think | context size | z.ai coding plan usage
  *
- * The z.ai API key is resolved in this order:
+ * The z.ai usage part is implemented by the /zai-usage command below; its API
+ * key is resolved in this order:
  *   1. ZAI_API_KEY / Z_AI_API_KEY env var
  *   2. ~/.pi/agent/auth.json entry with a provider id containing "zai"
  *      (supports pi's "!command" convention: the key is the output of a shell command)
@@ -129,10 +130,10 @@ function fmtTokens(n: number): string {
 function renderContext(ctx: any, theme: any): string {
 	const usage = ctx.getContextUsage?.();
 	if (!usage || usage.tokens == null || !usage.contextWindow) return theme.fg("dim", "ctx: ?");
-	const pct = usage.percent ?? Math.round((usage.tokens / usage.contextWindow) * 100);
+	const pct = usage.percent ?? (usage.tokens / usage.contextWindow) * 100;
 	return (
 		theme.fg("dim", "ctx: ") +
-		theme.fg(usageColor(pct), `${pct}%`) +
+		theme.fg(usageColor(pct), `${pct.toFixed(1)}%`) +
 		theme.fg("dim", ` ${fmtTokens(usage.tokens)}/${fmtTokens(usage.contextWindow)}`)
 	);
 }
