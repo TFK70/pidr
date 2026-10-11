@@ -2,7 +2,7 @@
  * Z.ai coding plan status footer
  *
  * Replaces the default footer with a minimal line showing only:
- *   current dir | model | thinking level | z.ai coding plan usage
+ *   current dir | model | think | context size | z.ai coding plan usage
  *
  * The z.ai API key is resolved in this order:
  *   1. ZAI_API_KEY / Z_AI_API_KEY env var
@@ -122,6 +122,21 @@ function usageColor(percent: number): "success" | "warning" | "error" {
 	return percent >= 90 ? "error" : percent >= 75 ? "warning" : "success";
 }
 
+function fmtTokens(n: number): string {
+	return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
+}
+
+function renderContext(ctx: any, theme: any): string {
+	const usage = ctx.getContextUsage?.();
+	if (!usage || usage.tokens == null || !usage.contextWindow) return theme.fg("dim", "ctx: ?");
+	const pct = usage.percent ?? Math.round((usage.tokens / usage.contextWindow) * 100);
+	return (
+		theme.fg("dim", "ctx: ") +
+		theme.fg(usageColor(pct), `${pct}%`) +
+		theme.fg("dim", ` ${fmtTokens(usage.tokens)}/${fmtTokens(usage.contextWindow)}`)
+	);
+}
+
 export default function (pi: ExtensionAPI) {
 	let usage: ZaiUsage | undefined;
 	let apiKey: string | undefined;
@@ -160,6 +175,7 @@ export default function (pi: ExtensionAPI) {
 						const dir = ctx.cwd.replace(homedir(), "~");
 						const model = ctx.model?.id ?? "no-model";
 						const think = ctx.thinkingLevel ?? pi.getThinkingLevel?.() ?? "off";
+						const context = renderContext(ctx, theme);
 
 						let zai: string;
 						if (!usage) zai = theme.fg("dim", "z.ai: …");
@@ -180,7 +196,9 @@ export default function (pi: ExtensionAPI) {
 							theme.fg("dim", " │ ") +
 							theme.fg("accent", model) +
 							theme.fg("dim", " │ ") +
-							theme.fg("dim", `think: ${think}`);
+							theme.fg("dim", `think: ${think}`) +
+						theme.fg("dim", " │ ") +
+						context;
 						const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(zai)));
 						return [truncateToWidth(left + pad + zai, width)];
 						} catch (e) {
@@ -196,6 +214,11 @@ export default function (pi: ExtensionAPI) {
 		apiKey = key;
 
 		refresh(); // initial fetch, fire and forget
+	});
+
+	// Re-render the footer as the context grows during a run.
+	pi.on("message_end", async () => {
+		requestRender?.();
 	});
 
 	// Refresh usage after each completed agent run so idle sessions make no
