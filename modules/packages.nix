@@ -14,7 +14,9 @@
     let
       bundledExtensions = [
         "${self}/extensions/pidr-footer.ts"
+        "${self}/extensions/pidr-instructions.ts"
         "${self}/extensions/askuserquestion"
+        "${self}/package"
       ];
 
       pi = inputs.pi-coding-agent.packages.${pkgs.stdenv.hostPlatform.system}.default;

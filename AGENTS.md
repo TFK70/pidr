@@ -10,14 +10,19 @@ Nix Home Manager.
 flake.nix            # root flake; outputs delegated via import-tree ./modules
 flake.lock
 extensions/          # pi extensions bundled into the pidr package
-  zai-usage.ts       # TUI footer: minimal line + z.ai coding plan usage
+  pidr-footer.ts      # custom TUI footer: dir | model | think | context | z.ai usage
+  pidr-instructions.ts # injects config/AGENTS.md into the system prompt
+package/             # pi package bundled into pidr (prompt templates)
+  prompts/careful.md # /careful — cautious-mode prompt template
+config/
+  AGENTS.md          # global ~/.pi/agent/AGENTS.md deployed by the home-manager module
 modules/
   flake/
     imports.nix      # imports flake-parts modules
     systems.nix      # systems from github:nix-systems/default
   packages.nix       # bundledExtensions list + wrapped `pidr`/default package
   shell.nix          # devShells.default with pi in buildInputs
-  home-manager.nix   # homeManagerModules.default: programs.pidr {enable, package, auth}
+  home-manager.nix   # homeManagerModules.default: programs.pidr {enable, package, auth, globalInstructions}
 ```
 
 - Language: pure Nix (flake-parts + import-tree). No application code, no
@@ -27,9 +32,11 @@ modules/
 - The only real logic lives in `modules/packages.nix` (pi wrapped via
   symlinkJoin + wrapProgram with `-e` flags for every entry in
   `bundledExtensions`) and `modules/home-manager.nix`: enabling
-  `programs.pidr` installs the pi package and writes `~/.pi/agent/auth.json`
-  from `programs.pidr.auth` attrs. The `package` and `auth` options have no
-  defaults; consumers must supply them.
+  `programs.pidr` installs the pi package, writes `~/.pi/agent/auth.json`
+  from `programs.pidr.auth` attrs, and deploys `~/.pi/agent/AGENTS.md` from
+  `programs.pidr.globalInstructions` (defaults to `config/AGENTS.md` in this
+  repo). The `package` and `auth` options have no defaults; consumers must
+  supply them.
 - IMPORTANT: new files must be `git add`ed before `nix build` — the flake
   source only contains tracked files, so untracked extensions/modules are
   invisible to Nix.
@@ -75,6 +82,10 @@ repo.
 ## Conventions
 
 - Verify Nix changes with `nix build` / `nix flake check` before finishing.
+- Do not perform any operations with git (if you have to - ask for user
+  confirmation).
+- When testing pi - always cleanup test sessions after testing, if any were
+  created.
 - Keep the repo declarative: nothing that pi downloads or rewrites at
   runtime should become a Nix-managed immutable file, except through the
   explicit bundle/wrapper mechanism described above.
