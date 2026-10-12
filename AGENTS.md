@@ -13,6 +13,7 @@ extensions/          # pi extensions bundled into the pidr package
   pidr-footer.ts      # custom TUI footer: dir | model | think | context | z.ai usage
   pidr-instructions.ts # injects config/AGENTS.md into the system prompt
 package/             # pi package bundled into pidr (prompt templates)
+modules/patches/     # Nix patches for extensions fetched from upstream repos
   prompts/careful.md # /careful — cautious-mode prompt template
 config/
   AGENTS.md          # global ~/.pi/agent/AGENTS.md deployed by the home-manager module

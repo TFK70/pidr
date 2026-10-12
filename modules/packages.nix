@@ -12,10 +12,61 @@
   perSystem =
     { pkgs, ... }:
     let
+      # pi-subagents extension, built from the upstream GitHub release.
+      # buildNpmPackage resolves the full dependency tree from the upstream
+      # package-lock.json (single npmDepsHash), compiles TypeScript and we
+      # prune devDependencies, so nothing is vendored in this repo.
+      pi-subagents = pkgs.buildNpmPackage {
+        pname = "pi-subagents";
+        version = "0.76.1";
+        src = pkgs.fetchFromGitHub {
+          owner = "nicobailon";
+          repo = "pi-subagents";
+          tag = "v0.76.1";
+          hash = "sha256-D+JOBUu/RsYMcG+Cj5my9LYXmzzq9bEP0fCbZEEKGLI=";
+        };
+        npmDepsHash = "sha256-MiZq1XsK5Kn7impiun/yV6wKZEuzPYaxKc75lb6uDdI=";
+        npmDepsFetcherVersion = 2;
+
+        # scripts/build-package.mjs compiles TS into dist-pkg/ (the package
+        # layout that is published to npm).
+        npmBuildScript = "build:pkg";
+
+        installPhase = ''
+          runHook preInstall
+          # Drop devDependencies, keep only runtime deps in node_modules.
+          npm prune --omit=dev
+          mkdir -p "$out"
+          cp -r dist-pkg/. "$out"/
+          cp -r node_modules "$out"/node_modules
+          runHook postInstall
+        '';
+      };
+
+      # askuserquestion extension from the upstream GitHub repo. Upstream
+      # ships pure TypeScript with no runtime dependencies, so no npm build
+      # is needed; the only pidr-specific tweak (promptSnippet/promptGuidelines
+      # so the tool is listed in the default system prompt) is carried as a
+      # patch instead of a vendored copy.
+      askuserquestion = pkgs.stdenv.mkDerivation {
+        name = "pi-askuserquestion-1.0.0";
+        src = pkgs.fetchFromGitHub {
+          owner = "ghoseb";
+          repo = "pi-askuserquestion";
+          rev = "e58609c9e9c8c4e8a0348c96eaad38dd7e6f0578";
+          hash = "sha256-F++LjTMMc9XAQZ3ZAvuTXK/e8kvszGDde5/uLgh+Vw8=";
+        };
+        patches = [ ./patches/askuserquestion-prompt-snippet.patch ];
+        installPhase = ''
+          cp -r . "$out"
+        '';
+      };
+
       bundledExtensions = [
         "${self}/extensions/pidr-footer.ts"
         "${self}/extensions/pidr-instructions.ts"
-        "${self}/extensions/askuserquestion"
+        askuserquestion
+        pi-subagents
         "${self}/package"
       ];
 

@@ -1,0 +1,21 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -21,6 +21,18 @@
+ If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label.
+ Always use this tool instead of asking questions in plain text — it provides a structured, interactive UI.`,
+ 
++    // Local addition (pidr): surface the tool in the default system prompt's
++    // "Available tools" section and add guideline bullets, so the model is
++    // explicitly instructed to ask instead of guessing. Upstream relies on the
++    // tool description alone; without promptSnippet custom tools are omitted
++    // from that section.
++    promptSnippet:
++      "ask_user_question - pause and ask the user 1-4 clarifying questions with selectable options",
++    promptGuidelines: [
++      "When a task is ambiguous, a requirement is missing, or multiple valid approaches differ materially, call ask_user_question instead of guessing or asking in plain text.",
++      "Ask early, before making changes, and batch related questions into one call (up to 4 questions).",
++    ],
++
+     parameters: InputSchema,
+ 
+     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
