@@ -17,6 +17,14 @@ the question tool is unavailable (e.g. non-interactive sessions).
 Before executing potentially dangerous or destructive operations - call the
 `ask_user_question` tool to ask for confirmation.
 
+## ~/.pi protection
+
+Any write operations inside `~/.pi` are FORBIDDEN without explicit user
+confirmation (via `ask_user_question`). Read-only operations on `~/.pi` are
+allowed. To test pi customizations, do NOT make "dirty" changes to the
+running pi's global config: instead change the pi Nix configuration in this
+repository and run the built flake (`nix build` / `nix run`).
+
 ## Delegation policy (standing authorization)
 
 These instructions are a standing operator authorization to delegate to

@@ -64,21 +64,21 @@ modules/
 ## Workflow rule: changes to pi's behavior (extensions, prompts, skills, themes, settings)
 
 When asked to add something to pi — e.g. write an extension, add a prompt
-template, skill, or theme — follow this two-step process:
+template, skill, or theme — make the change declaratively in this repo and
+test by building and running the flake. **Never make "dirty" changes to the
+global config of the running pi (`~/.pi`)** — any write operation inside
+`~/.pi` requires explicit user confirmation; read-only access to `~/.pi` is
+allowed.
 
-1. **Test on the current pi installation first (dirty changes).** Apply the
-   change directly to the live user config (`~/.pi/agent/` — e.g.
-   `~/.pi/agent/extensions/`, `~/.pi/agent/prompts/`) or the relevant project
-   `.pi/` directory, then verify with the running pi installation that the
-   change is valid and works as intended.
-2. **Once verified, make the change in this repo** so that future
+1. **Make the change in this repo** so that future
    installations of pi from pidr include it: package the resource via a Nix
    store path (see "How pi configuration works" above) and load it through
    the flake's bundled-packages mechanism, keeping everything declarative
    and offline-installable.
+2. **Test by building and running the flake** (`nix build` / `nix run`,
+   using the wrapped `pidr` binary) — not by mutating the live user config.
 
-Do not skip step 1: never land untested pi customizations directly in the
-repo.
+Do not skip step 2: never land untested pi customizations.
 
 ## Conventions
 
