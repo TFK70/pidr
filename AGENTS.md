@@ -12,9 +12,11 @@ flake.lock
 extensions/          # pi extensions bundled into the pidr package
   pidr-footer.ts      # custom TUI footer: dir | model | think | context | z.ai usage
   pidr-instructions.ts # injects config/AGENTS.md into the system prompt
+  pidr-splash.ts      # startup splash: lists active extensions and MCP servers
+  claude-bridge.ts    # bridges Claude configs (.mcp.json, CLAUDE.md) into pi
 package/             # pi package bundled into pidr (prompt templates)
-modules/patches/     # Nix patches for extensions fetched from upstream repos
   prompts/careful.md # /careful — cautious-mode prompt template
+modules/patches/     # Nix patches for extensions fetched from upstream repos
 config/
   AGENTS.md          # global ~/.pi/agent/AGENTS.md deployed by the home-manager module
 modules/
@@ -36,11 +38,10 @@ modules/
   `programs.pidr` installs the pi package, writes `~/.pi/agent/auth.json`
   from `programs.pidr.auth` attrs, and deploys `~/.pi/agent/AGENTS.md` from
   `programs.pidr.globalInstructions` (defaults to `config/AGENTS.md` in this
-  repo). The `package` and `auth` options have no defaults; consumers must
-  supply them.
-- IMPORTANT: new files must be `git add`ed before `nix build` — the flake
-  source only contains tracked files, so untracked extensions/modules are
-  invisible to Nix.
+  repo). The `auth` option has no default and must be supplied; `package`
+is assigned automatically by the module from the flake.
+- IMPORTANT: new files must be `git add`ed before `nix build` (see
+  Conventions — the flake source contains only tracked files).
 
 ## How pi configuration works (important context)
 
@@ -83,8 +84,9 @@ Do not skip step 2: never land untested pi customizations.
 ## Conventions
 
 - Verify Nix changes with `nix build` / `nix flake check` before finishing.
-- Do not perform any operations with git (if you have to - ask for user
-  confirmation).
+- Git: only read-only commands (`status`, `diff`, `log`) and `git add`
+  (required for `nix build` — the flake source contains only tracked
+  files) are allowed; anything else needs user confirmation.
 - When testing pi - always cleanup test sessions after testing, if any were
   created.
 - Keep the repo declarative: nothing that pi downloads or rewrites at
@@ -97,7 +99,11 @@ Run this after any change that affects the build or behavior of pidr:
 `flake.lock` updates (above all a new pi version), edits to `extensions/`,
 `modules/packages.nix` (the `bundledExtensions` list, package versions and
 hashes), `modules/home-manager.nix`, `package/`, and patches in
-`modules/patches/`. Steps go from cheap static checks to expensive
+`modules/patches/`. Run only the steps whose components the change edits
+or affects — do not run the whole checklist after every minor edit (a
+comment fix needs nothing beyond `nix build`; a doc-only change needs
+nothing at all). A `flake.lock` bump affects every bundled extension, so
+any pi version change requires steps 1–4. Steps go from cheap static checks to expensive
 interactive ones; steps 3–6 must be run against the binary from
 `nix build` (`result/bin/pi`), not the globally installed `pi`.
 
@@ -112,9 +118,7 @@ nix build           # builds ./result — the default package (= pidr)
 Expected results:
 
 - `git status --short` shows no untracked files that should take part in
-  the build: the flake source contains only files in the git index, so
-  uncommitted extensions/modules are invisible to Nix. New files must be
-  `git add`ed before `nix build`.
+  the build (see Conventions: untracked files are invisible to Nix).
 - `nix flake check` passes without errors.
 - `nix build` succeeds; `result/bin/pi` exists (it is the symlinkJoin
   wrapper around pi with `-e` flags for every entry in
@@ -127,8 +131,8 @@ result/bin/pi --version                    # the pi version built from the curre
 nix flake metadata | grep pi-coding-agent  # the pi-coding-agent rev pinned in flake.lock
 ```
 
-- Check that the pi version matches what you expect after the `flake.lock`
-  update.
+- Check that the pi version matches the release you bumped `flake.lock`
+  to (see `nix flake metadata`).
 - Check the bundled package versions in `modules/packages.nix`:
   `pi-subagents` (`version`/`tag`/`hash`; currently v0.80.0) and
   `askuserquestion` (rev `e58609c…`, 1.0.0, patch
@@ -185,7 +189,7 @@ In an interactive session (`result/bin/pi`), check three scenarios:
    subagent with async: true, wait for it to finish via bg_wait and return
    the result." Expected: the run starts in the background, `bg_wait`
    returns the status and the result. This background mode is exactly what
-   broke historically (see step 2) — skipping it is not allowed.
+   broke historically (see step 2).
 3. **Management calls (status/list)**: "Show the list and status of
    background runs." Expected: the run from step 2 shows up as
    running/completed, with no errors.
@@ -259,5 +263,3 @@ Expected results (`build` puts the activation package into `./result`):
   without activating it into the live HOME.
 - After interactive tests, delete the test sessions from
   `~/.pi/agent/sessions` (find them by test time); leave no garbage.
-- Order: static first (steps 1–2), then runtime (steps 3–6). Do not test
-  pi from a tree with untracked files or a failed build.
