@@ -80,6 +80,7 @@
         nativeBuildInputs = [ pkgs.makeWrapper ];
         postBuild = ''
           wrapProgram "$out/bin/pi" \
+            --set PIDR_REV "${self.rev or self.dirtyRev}" \
             --add-flags "${lib.concatMapStringsSep " " (e: "-e ${e}") bundledExtensions}"
         '';
         meta.mainProgram = "pi";

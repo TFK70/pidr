@@ -49,6 +49,9 @@ interface PidrSplashData {
 	mcp: Array<{ name: string; state: McpDisplayState }>;
 	/** pi's own startup header is not silenced (quietStartup !== true). */
 	warnQuietStartup: boolean;
+	/** pidr git revision injected as PIDR_REV by the Nix wrapper; null when
+	 *  unset. Snapshotted so saved sessions keep the rev they started with. */
+	pidrRev: string | null;
 }
 
 const MCP_MARK: Record<McpDisplayState, readonly [mark: string, color: Parameters<Theme["fg"]>[0]]> = {
@@ -190,7 +193,14 @@ function splashLines(data: PidrSplashData, theme: Theme): string[] {
 		return `${name} ${theme.fg(color, mark)}`;
 	});
 	const mcp = dim("mcp: ") + (mcpParts.length ? mcpParts.join(dim(" · ")) : dim("нет"));
-	const lines = ["", ...art, "", rule, extensions, mcp];
+	const lines = ["", ...art, "", rule];
+	if (data.pidrRev !== null) {
+		// PIDR_REV is either a clean git rev or "<rev>-dirty"; strip the
+		// dirty suffix and shorten to the usual 7-char form.
+		const shown = data.pidrRev.replace(/-dirty$/, "").slice(0, 7);
+		lines.push(dim("pidr: ") + theme.fg("warning", shown));
+	}
+	lines.push(extensions, mcp);
 	if (data.warnQuietStartup) {
 		lines.push(
 			theme.fg(
@@ -227,6 +237,7 @@ export default function (pi: ExtensionAPI) {
 					extensions,
 					mcp: mcpNames.map((name) => ({ name, state: displayState(reports.get(name)) })),
 					warnQuietStartup: !isQuietStartup(pi),
+					pidrRev: process.env.PIDR_REV ?? null,
 				});
 			} catch (e) {
 				console.warn(`[pidr-splash] ${e instanceof Error ? e.message : e}`);
