@@ -18,14 +18,14 @@
       # prune devDependencies, so nothing is vendored in this repo.
       pi-subagents = pkgs.buildNpmPackage {
         pname = "pi-subagents";
-        version = "0.76.1";
+        version = "0.80.0";
         src = pkgs.fetchFromGitHub {
           owner = "nicobailon";
           repo = "pi-subagents";
-          tag = "v0.76.1";
-          hash = "sha256-D+JOBUu/RsYMcG+Cj5my9LYXmzzq9bEP0fCbZEEKGLI=";
+          tag = "v0.80.0";
+          hash = "sha256-/XjtoCIQu1c0DwOM+aeWWBmyk7JFuQWB10o9RLJk/kU=";
         };
-        npmDepsHash = "sha256-MiZq1XsK5Kn7impiun/yV6wKZEuzPYaxKc75lb6uDdI=";
+        npmDepsHash = "sha256-tE3uoRQZ0L0GYQDv3AwsvrAZSEAObQVl/DJ50sM4thA=";
         npmDepsFetcherVersion = 2;
 
         # scripts/build-package.mjs compiles TS into dist-pkg/ (the package
