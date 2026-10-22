@@ -64,7 +64,7 @@ const MCP_MARK: Record<McpDisplayState, readonly [mark: string, color: Parameter
 
 /** pidr bundles these extensions statically; settings.json may declare more. */
 function collectExtensions(pi: ExtensionAPI): string[] {
-	const names = new Set<string>(["pidr-footer", "pidr-instructions", "pidr-splash"]);
+	const names = new Set<string>(["pidr-footer", "pidr-instructions", "pidr-delegation-guard", "pidr-splash", "pidr-mcp-kubernetes"]);
 	try {
 		const settings = pi.getSettings() as { packages?: unknown[]; extensions?: unknown[] };
 		for (const source of [...(settings.packages ?? []), ...(settings.extensions ?? [])]) {

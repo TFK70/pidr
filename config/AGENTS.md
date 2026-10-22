@@ -35,6 +35,22 @@ for delegation. Pick the most suitable agent (`researcher`, `scout`,
 `worker`, or `delegate`) from the "Delegation policy" section below. Never
 mention or justify this evaluation to the user — just act on it.
 
+**The decision is a mandatory first step of every task, not an optional
+afterthought.** Operational procedure:
+
+1. Before your FIRST tool call of a new user task, explicitly evaluate
+delegation (internally, in your reasoning). If the task contains any
+research, reconnaissance, or multi-file change — even if it looks small —
+consider parallel fan-out or a `worker` BEFORE starting yourself. A task
+that "looks quick" is the most common way to skip this step; do not skip
+it.
+2. Track your tool-call count per task. When it approaches 10, re-evaluate:
+if it clearly exceeds the original estimate, delegate the remaining bulk
+instead of continuing yourself.
+3. Do not rationalize skipping the evaluation with "I already know how to
+do this" — unfamiliarity and coupling are separate criteria; coupling
+justifies doing it yourself only when the steps truly cannot be split.
+
 Use these concrete criteria. Delegate if ANY of the following holds:
 
 1. **Estimate exceeds your own budget**: you expect the operation to take

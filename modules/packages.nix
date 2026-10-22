@@ -65,8 +65,10 @@
       bundledExtensions = [
         "${self}/extensions/pidr-footer.ts"
         "${self}/extensions/pidr-instructions.ts"
+        "${self}/extensions/pidr-delegation-guard.ts"
         "${self}/extensions/pidr-splash.ts"
         "${self}/extensions/claude-bridge.ts"
+        "${self}/extensions/pidr-mcp-kubernetes.ts"
         askuserquestion
         pi-subagents
         "${self}/package"
