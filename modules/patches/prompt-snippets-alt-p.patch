@@ -1,0 +1,31 @@
+--- a/extensions/prompt-snippets/index.ts
++++ b/extensions/prompt-snippets/index.ts
+@@ -4,7 +4,7 @@
+  * Each snippet is a markdown file with frontmatter (name, description,
+  * placement, order) stored in the `snippets/` directory next to this file.
+  *
+- * - Press alt+s or run /snippets to open the toggle menu (space: toggle,
++ * - Press alt+p or run /snippets to open the toggle menu (space: toggle,
+  *   tab: preview, enter: apply, esc: cancel). The menu is a bordered,
+  *   scrollable view.
+  * - Active snippets appear as a widget above the editor, with prepend and
+@@ -309,7 +309,7 @@
+ 		};
+ 	});
+ 
+-	pi.registerShortcut("alt+s", {
++	pi.registerShortcut("alt+p", {
+ 		description: "Toggle prompt snippets",
+ 		handler: async (ctx) => {
+ 			await openMenu(ctx);
+--- a/extensions/prompt-snippets/README.md
++++ b/extensions/prompt-snippets/README.md
+@@ -6,7 +6,7 @@
+ 
+ ## Usage
+ 
+-- Press **alt+s** or run **/snippets** to open the toggle menu.
++- Press **alt+p** or run **/snippets** to open the toggle menu.
+   - `up`/`down` to navigate, `space` to toggle, `enter` to apply, `esc` to cancel.
+   - `tab` previews the highlighted snippet (name, placement, order, filename,
+     and full body; `up`/`down` scroll long bodies). `tab` or `esc` returns to

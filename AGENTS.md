@@ -16,6 +16,8 @@ extensions/          # pi extensions bundled into the pidr package
   claude-bridge.ts    # bridges Claude configs (.mcp.json, CLAUDE.md) into pi
 package/             # pi package bundled into pidr (prompt templates)
   prompts/careful.md # /careful — cautious-mode prompt template
+snippets/            # prompt snippets ported from amosblomqvist/pi-config, overlaid
+                     # onto the fetched prompt-snippets extension in modules/packages.nix
 modules/patches/     # Nix patches for extensions fetched from upstream repos
 config/
   AGENTS.md          # global ~/.pi/agent/AGENTS.md deployed by the home-manager module
@@ -42,6 +44,24 @@ modules/
 is assigned automatically by the module from the flake.
 - IMPORTANT: new files must be `git add`ed before `nix build` (see
   Conventions — the flake source contains only tracked files).
+
+## prompt-snippets extension
+
+`prompt-snippets` is a TUI extension from `amosblomqvist/pi-config`,
+pinned to rev `f82da56` in `modules/packages.nix`. The extension code is
+fetched from upstream, but the snippet set is local in `snippets/` and
+authoritative — upstream's snippets are dropped and replaced by the local
+set at build time.
+
+How it works: `alt+p` or `/snippets` opens a checkbox dialog; marked
+snippets are injected into the outgoing message — prepend before / append
+after the user text — and the toggles reset after each send. The `alt+p`
+hotkey is a local patch diverging from upstream (which uses `alt+s`):
+`modules/patches/prompt-snippets-alt-p.patch`. The local
+snippets provide per-message behavior modes: `session-kickoff`,
+`delegate-exploration`, `orchestrator-mode`, `diagnose-report`, and
+`ask-questions` ("No questions" — a per-message override of the global
+clarification policy).
 
 ## How pi configuration works (important context)
 
@@ -92,6 +112,9 @@ Do not skip step 2: never land untested pi customizations.
 - Keep the repo declarative: nothing that pi downloads or rewrites at
   runtime should become a Nix-managed immutable file, except through the
   explicit bundle/wrapper mechanism described above.
+- Avoid documentation drift: after significant repository changes (new
+  files/directories, new bundled extensions, structural changes), review
+  AGENTS.md and update it promptly.
 
 ## pidr health checklist
 
@@ -166,8 +189,10 @@ without errors:
 
 - `extensions/pidr-footer.ts`;
 - `extensions/pidr-instructions.ts`;
+- `extensions/pidr-delegation-guard.ts`;
 - `extensions/pidr-splash.ts`;
 - `extensions/claude-bridge.ts`;
+- `extensions/pidr-mcp-kubernetes.ts`;
 - `askuserquestion` (the patched copy pinned to a fixed GitHub revision);
 - `pi-subagents` (npm build from a GitHub release);
 - `package/` (prompt templates).

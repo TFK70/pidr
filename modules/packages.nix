@@ -62,6 +62,32 @@
         '';
       };
 
+      # prompt-snippets extension from the upstream pi-config repo. The
+      # TypeScript extension is pinned to an upstream revision (pure TS with
+      # no runtime dependencies, loaded in place by pi), but the snippet
+      # bodies are authoritative in this repo: upstream's snippets/ is
+      # dropped and replaced by the local snippets/*.md set at build time.
+      # The menu hotkey is also diverged from upstream via a local patch:
+      # alt+p instead of alt+s (see patches/prompt-snippets-alt-p.patch).
+      prompt-snippets = pkgs.stdenv.mkDerivation {
+        name = "pi-prompt-snippets-f82da56";
+        src = pkgs.fetchFromGitHub {
+          owner = "amosblomqvist";
+          repo = "pi-config";
+          rev = "f82da563ab05d66729492d64c7ed4e96db3663f3";
+          hash = "sha256-G3q+6YO3CvwkpUwx+qYitrWJB8HSUF6WJ66LRjujmVY=";
+        };
+        patches = [ ./patches/prompt-snippets-alt-p.patch ];
+        installPhase = ''
+          mkdir -p "$out"
+          cp -r extensions/prompt-snippets/. "$out"/
+          # Local snippets are authoritative: replace the upstream set.
+          rm -rf "$out"/snippets
+          mkdir -p "$out"/snippets
+          cp ${self}/snippets/*.md "$out"/snippets/
+        '';
+      };
+
       bundledExtensions = [
         "${self}/extensions/pidr-footer.ts"
         "${self}/extensions/pidr-instructions.ts"
@@ -70,6 +96,7 @@
         "${self}/extensions/claude-bridge.ts"
         "${self}/extensions/pidr-mcp-kubernetes.ts"
         askuserquestion
+        prompt-snippets
         pi-subagents
         "${self}/package"
       ];

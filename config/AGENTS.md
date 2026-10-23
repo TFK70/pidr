@@ -18,6 +18,15 @@ state the assumption in your reply.
 Before destructive operations (file deletion, force-push, writes outside
 the project or `~/.pi`), ask for confirmation via `ask_user_question`.
 
+## Verify, don't assume
+
+Do not rely on unverified facts. Before depending on critical details —
+file contents, paths, command output, API behavior, or claims from
+external sources — check them with tools first. If you cannot verify
+something (no tool can reach it, or the fact lives only in the user's
+head), ask instead of assuming. Start implementing only when you are
+confident in the facts your plan depends on.
+
 ## ~/.pi protection
 
 Any write operations inside `~/.pi` are FORBIDDEN without explicit user
