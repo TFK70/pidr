@@ -14,8 +14,10 @@ extensions/          # pi extensions bundled into the pidr package
   pidr-instructions.ts # injects config/AGENTS.md into the system prompt
   pidr-splash.ts      # startup splash: lists active extensions and MCP servers
   claude-bridge.ts    # bridges Claude configs (.mcp.json, CLAUDE.md) into pi
-package/             # pi package bundled into pidr (prompt templates)
+package/             # pi package bundled into pidr (prompt templates, skills)
   prompts/careful.md # /careful — cautious-mode prompt template
+  prompts/comparative-research.md # /comparative-research — deep comparative research via the skill
+  skills/comparative-research/SKILL.md # bundled skill: deep comparative research workflow
 snippets/            # prompt snippets ported from amosblomqvist/pi-config, overlaid
                      # onto the fetched prompt-snippets extension in modules/packages.nix
 modules/patches/     # Nix patches for extensions fetched from upstream repos
@@ -189,7 +191,6 @@ without errors:
 
 - `extensions/pidr-footer.ts`;
 - `extensions/pidr-instructions.ts`;
-- `extensions/pidr-delegation-guard.ts`;
 - `extensions/pidr-splash.ts`;
 - `extensions/claude-bridge.ts`;
 - `extensions/pidr-mcp-kubernetes.ts`;
