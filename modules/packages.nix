@@ -94,6 +94,7 @@
         "${self}/extensions/pidr-splash.ts"
         "${self}/extensions/claude-bridge.ts"
         "${self}/extensions/pidr-mcp-kubernetes.ts"
+        "${self}/extensions/pidr-herdr-subagents.ts"
         askuserquestion
         prompt-snippets
         pi-subagents
@@ -109,6 +110,7 @@
         postBuild = ''
           wrapProgram "$out/bin/pi" \
             --set PIDR_REV "${self.rev or self.dirtyRev}" \
+            --set PI_SUBAGENTS_DIR "${pi-subagents}" \
             --add-flags "${lib.concatMapStringsSep " " (e: "-e ${e}") bundledExtensions}"
         '';
         meta.mainProgram = "pi";
