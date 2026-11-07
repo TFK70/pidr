@@ -15,7 +15,10 @@ extensions/          # pi extensions bundled into the pidr package
   pidr-splash.ts      # startup splash: lists active extensions and MCP servers
   claude-bridge.ts    # bridges Claude configs (.mcp.json, CLAUDE.md) into pi
   pidr-mcp-kubernetes.ts # registers the homelab kubernetes MCP server
-  pidr-herdr-subagents.ts # exposes pi-subagents runs as herdr-core (hc) inspector terminals
+  pidr-herdr-subagents/ # exposes pi-subagents runs as herdr-core (hc) inspector terminals:
+    pidr-herdr-subagents.ts # extension: auto-open, status via OSC 7501, auto-close; no panes
+    herdr-subagent-monitor.mjs # terminal-side wrapper: reports working/done (OSC 7501)
+                         # from the run's status.json while streaming the inspector dashboard
 package/             # pi package bundled into pidr (prompt templates, skills)
   prompts/careful.md # /careful — cautious-mode prompt template
   prompts/comparative-research.md # /comparative-research — deep comparative research via the skill
@@ -196,7 +199,7 @@ without errors:
 - `extensions/pidr-splash.ts`;
 - `extensions/claude-bridge.ts`;
 - `extensions/pidr-mcp-kubernetes.ts`;
-- `extensions/pidr-herdr-subagents.ts`;
+- `extensions/pidr-herdr-subagents/pidr-herdr-subagents.ts`;
 - `askuserquestion` (the patched copy pinned to a fixed GitHub revision);
 - `pi-subagents` (npm build from a GitHub release);
 - `package/` (prompt templates).

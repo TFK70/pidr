@@ -11,11 +11,28 @@
  *   --async-dir <dir> --run-id <id> --refresh-ms 1000` — a live read-only
  *   dashboard terminal parented to pi's own herdr terminal (`--parent`
  *   defaults to the launching terminal, which inside herdr is the pi panel).
+ * - status: the inspector itself never reports, so its terminal would show
+ *   no working/done state in the herdr agents sidebar. It therefore runs
+ *   behind the sibling wrapper `herdr-subagent-monitor.mjs` (loaded in
+ *   place from this flake source directory), which passes the dashboard
+ *   through unchanged and translates `<asyncDir>/status.json` into the
+ *   terminal's root OSC 7501 status (`state=…:app=pi-subagents:title=…`).
+ *   herdr then also derives the parent's status from these terminals
+ *   (a parent takes its most urgent sub-agent's place) — nothing extra is
+ *   needed here for that.
+ * - auto-close: on `subagent:async-complete` the run's terminal is closed
+ *   fire-and-forget (`<hc> kill <address-or-name>` makes it finished,
+ *   `<hc> rm <addr>` drops it from the core), and `session_shutdown`
+ *   closes every still-tracked terminal so inspectors of an ended session
+ *   do not linger. PIDR_HERDR_AUTOCLOSE=0 keeps them open instead.
  * - inspector plugin: register `"pidr-herdr-core"` in pi-subagents'
  *   inspector registry (`pi-subagents:inspector-register:v1` on the
  *   `pi.events` bus), so explicit inspector.open/status/close drive the
  *   same terminals through the launch.executable + launch.argv command
- *   pi-subagents itself prepared.
+ *   pi-subagents itself prepared, also behind the monitor.
+ *
+ * No panes: subagent terminals live only in the herdr agents sidebar
+ * (nothing here talks to herdr-app anymore).
  *
  * Fully inert outside herdr: the extension activates only when
  * HC_TERMINAL_ID or HC_TERMINAL_SOCKET is set and a herdr-core binary
@@ -25,17 +42,19 @@
  * PI_SUBAGENTS_DIR (set by the Nix wrapper) or with a missing
  * inspector-runner.mjs, auto-open is off, but the inspector plugin still
  * registers: open() runs the launch command pi-subagents provides, which
- * does not need that path.
+ * does not need that path. A missing monitor wrapper is logged and
+ * degrades to the bare inspector (terminal without OSC 7501 status).
  *
  * Every external call is fire-and-forget with logged failures, so neither
  * the event handler nor the plugin callbacks can block or crash a session.
  * Inspector terminals are read-only dashboards: closing one only kills its
- * own terminal (`<hc> kill`), never the subagent run.
+ * own terminal, never the subagent run.
  */
 
 import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const TAG = "[pidr-herdr-subagents]";
@@ -44,6 +63,7 @@ const TAG = "[pidr-herdr-subagents]";
  *  src/api/inspectors.js). The package cannot be imported from a sibling
  *  `-e` extension, so the event names and shapes are restated here. */
 const SUBAGENT_ASYNC_STARTED_EVENT = "subagent:async-started";
+const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
 const INSPECTOR_REGISTER_EVENT = "pi-subagents:inspector-register:v1";
 
 /** Inspector plugin name: 1–128 letters/digits/./_/-, must not collide with
@@ -108,10 +128,10 @@ interface InspectorRegistrationRequest {
 }
 
 /** Open inspector terminal per target key; `name` is null when herdr-core
- *  auto-assigned the name after a clash — such a terminal cannot be closed
- *  by name. In-memory only: herdr terminals outlive pi, but ownership is
- *  tracked per pi process. */
-const bindings = new Map<string, { name: string | null }>();
+ *  auto-assigned the name after a clash — such a terminal can only be
+ *  closed by its address. In-memory only: herdr terminals outlive pi, but
+ *  ownership is tracked per pi process. */
+const bindings = new Map<string, { name: string | null; address?: string }>();
 
 /** Run ids that already got an auto-opened terminal (one per run). */
 const seenRuns = new Set<string>();
@@ -163,6 +183,12 @@ function extensionActive(env: NodeJS.ProcessEnv): boolean {
 	return env.PIDR_HERDR_SUBAGENTS !== "0" && insideHerdrCore(env) && resolveHcBin() !== undefined;
 }
 
+/** Auto-closing tracked terminals (async-complete, session_shutdown):
+ *  on by default, PIDR_HERDR_AUTOCLOSE=0 keeps them open. */
+function autocloseEnabled(env: NodeJS.ProcessEnv): boolean {
+	return env.PIDR_HERDR_AUTOCLOSE !== "0";
+}
+
 /** Standalone inspector entry shipped inside the pi-subagents package
  *  (path injected by the Nix wrapper via PI_SUBAGENTS_DIR). Missing dir or
  *  file → auto-open stays off; the inspector plugin still works. */
@@ -175,6 +201,41 @@ function inspectorRunnerPath(): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/** The OSC 7501 status monitor shipped next to this extension (pi loads
+ *  `-e` extensions in place, so the flake source directory is the runtime
+ *  directory too). Missing file → undefined, logged by the callers, which
+ *  then degrade to the bare inspector (terminal without status). */
+function monitorPath(): string | undefined {
+	try {
+		const monitor = fileURLToPath(new URL("./herdr-subagent-monitor.mjs", import.meta.url));
+		return existsSync(monitor) ? monitor : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Command prefix running the inspector behind the status monitor:
+ *  `node <monitor> --runner <inspector-runner>`; without a monitor, the
+ *  bare `node <inspector-runner>` (reported once, then silent). */
+function inspectorCommandPrefix(runner: string): string[] {
+	const monitor = monitorPath();
+	if (!monitor) {
+		console.error(
+			`${TAG} herdr-subagent-monitor.mjs not found next to the extension; inspector terminals will not report status`,
+		);
+		return [process.execPath, runner];
+	}
+	return [process.execPath, monitor, "--runner", runner];
+}
+
+/** Wrap a pi-subagents inspector launch (executable + argv, argv[0] being
+ *  the inspector-runner) the same way: run the monitor in front. */
+function wrapLaunchCommand(launch: InspectorLaunch): string[] {
+	const monitor = monitorPath();
+	if (!monitor || launch.argv.length === 0) return [launch.executable, ...launch.argv];
+	return [launch.executable, monitor, "--runner", launch.argv[0], ...launch.argv.slice(1)];
 }
 
 /** Binding key: run id plus the child index of a chain step (the root
@@ -214,39 +275,56 @@ interface TerminalLaunch {
 /** Fire-and-forget `<hcBin> run --bg [--name n] [--cwd c] -- <command>`:
  *  start an inspector terminal parented to pi's own herdr terminal.
  *  `hc run --bg` returns as soon as the terminal starts, so `onOutcome`
- *  (optional) fires quickly with that start result; failures are reported
- *  to the caller, never thrown. */
+ *  (optional) fires quickly with that start result and, on success, the
+ *  `--json` stdout describing the new terminal; failures are reported to
+ *  the caller, never thrown. */
 function launchInspectorTerminal(
 	hcBin: string,
 	launch: TerminalLaunch,
-	onOutcome?: (ok: boolean, detail: string) => void,
+	onOutcome?: (ok: boolean, detail: string, runStdout: string) => void,
 ): void {
-	const args = ["run", "--bg"];
+	const args = ["run", "--bg", "--json"];
 	if (launch.name) args.push("--name", launch.name);
 	if (launch.cwd) args.push("--cwd", launch.cwd);
 	args.push("--", ...launch.command);
+	let stdout = "";
 	let stderr = "";
 	let settled = false;
-	const settle = (ok: boolean, detail: string) => {
+	const settle = (ok: boolean, detail: string, runStdout = "") => {
 		if (settled) return;
 		settled = true;
-		onOutcome?.(ok, detail);
+		onOutcome?.(ok, detail, runStdout);
 	};
 	try {
 		const child = spawn(hcBin, args, {
-			stdio: ["ignore", "ignore", "pipe"],
+			stdio: ["ignore", "pipe", "pipe"],
 			timeout: 15_000, // --bg returns at once; a hang means a broken core
 			...(launch.signal ? { signal: launch.signal } : {}),
 		});
+		child.stdout?.on("data", (chunk: Buffer) => (stdout = (stdout + chunk.toString()).slice(-4096)));
 		child.stderr?.on("data", (chunk: Buffer) => (stderr = (stderr + chunk.toString()).slice(-4096)));
 		child.once("error", (e) => settle(false, e.message));
 		child.once("close", (code, signal) => {
-			if (code === 0) settle(true, "");
+			if (code === 0) settle(true, "", stdout);
 			else if (signal) settle(false, `terminated by ${signal}`);
 			else settle(false, stderr.trim() || `exit code ${code}`);
 		});
 	} catch (e) {
 		settle(false, e instanceof Error ? e.message : String(e));
+	}
+}
+
+/** Terminal address from `hc run --json` stdout — a single JSON object
+ *  with an `address` field (anything else, or no JSON, means no address;
+ *  auto-close then falls back to the terminal name). */
+function addressFromRunJson(runStdout: string): string | undefined {
+	try {
+		const parsed: unknown = JSON.parse(runStdout.trim());
+		if (typeof parsed !== "object" || parsed === null) return undefined;
+		const address = (parsed as { address?: unknown }).address;
+		return typeof address === "string" && address ? address : undefined;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -260,14 +338,16 @@ interface TrackedOpen extends TerminalLaunch {
 /** Open and track an inspector terminal. The binding is recorded up front
  *  (a racing inspector.open for the same target then sees it and does not
  *  spawn a duplicate), downgraded to unnamed when the chosen name clashes
- *  with a live terminal, and rolled back when the terminal never starts. */
+ *  with a live terminal, and rolled back when the terminal never starts.
+ *  On success the binding keeps the terminal address from the run output —
+ *  auto-close targets it before the name. */
 function openTrackedInspectorTerminal(open: TrackedOpen): void {
 	bindings.set(open.key, { name: open.name ?? null });
 	const attempt = (name: string | undefined) => {
 		launchInspectorTerminal(
 			open.hcBin,
 			{ name, cwd: open.cwd, command: open.command, signal: open.signal },
-			(ok, detail) => {
+			(ok, detail, runStdout) => {
 				if (!ok && name !== undefined && !open.signal?.aborted) {
 					// The name is taken by a live terminal (e.g. a leftover
 					// inspector from an earlier pi session): retry once and
@@ -276,8 +356,9 @@ function openTrackedInspectorTerminal(open: TrackedOpen): void {
 					attempt(undefined);
 					return;
 				}
-				if (ok) bindings.set(open.key, { name: name ?? null });
-				else {
+				if (ok) {
+					bindings.set(open.key, { name: name ?? null, address: addressFromRunJson(runStdout) });
+				} else {
 					bindings.delete(open.key);
 					console.error(`${TAG} inspector terminal for ${open.key} failed: ${detail}`);
 				}
@@ -288,26 +369,65 @@ function openTrackedInspectorTerminal(open: TrackedOpen): void {
 	attempt(open.name);
 }
 
-/** Fire-and-forget `<hcBin> kill <name>` — kills the inspector terminal
- *  only; the inspector is a read-only dashboard, the run continues. */
-function killInspectorTerminal(hcBin: string, name: string): void {
+/** Fire-and-forget `<hcBin> rm <target>` — drops a finished terminal from
+ *  the core; failures are logged and otherwise ignored. */
+function removeFinishedTerminal(hcBin: string, target: string): void {
 	let stderr = "";
 	try {
-		const child = spawn(hcBin, ["kill", name], {
+		const child = spawn(hcBin, ["rm", target], {
 			stdio: ["ignore", "ignore", "pipe"],
 			timeout: 10_000,
 		});
 		child.stderr?.on("data", (chunk: Buffer) => (stderr = (stderr + chunk.toString()).slice(-4096)));
-		child.once("error", (e) => console.error(`${TAG} ${hcBin} kill ${name}: ${e.message}`));
+		child.once("error", (e) => console.error(`${TAG} ${hcBin} rm ${target}: ${e.message}`));
 		child.once("close", (code, signal) => {
 			if (code === 0) return;
 			console.error(
-				`${TAG} ${hcBin} kill ${name}: ${stderr.trim() || (signal ? `terminated by ${signal}` : `exit code ${code}`)}`,
+				`${TAG} ${hcBin} rm ${target}: ${stderr.trim() || (signal ? `terminated by ${signal}` : `exit code ${code}`)}`,
 			);
 		});
 	} catch (e) {
-		console.error(`${TAG} ${hcBin} kill ${name}: ${e instanceof Error ? e.message : e}`);
+		console.error(`${TAG} ${hcBin} rm ${target}: ${e instanceof Error ? e.message : e}`);
 	}
+}
+
+/** Fire-and-forget `<hcBin> kill <target>` then `<hcBin> rm <target>` —
+ *  kill makes the terminal finished (the monitor + inspector inside die
+ *  with it; the subagent run itself is untouched), rm removes the finished
+ *  terminal from the core. rm runs only after a successful kill; every
+ *  failure is logged and otherwise ignored. */
+function closeInspectorTerminal(hcBin: string, target: string): void {
+	let stderr = "";
+	try {
+		const child = spawn(hcBin, ["kill", target], {
+			stdio: ["ignore", "ignore", "pipe"],
+			timeout: 10_000,
+		});
+		child.stderr?.on("data", (chunk: Buffer) => (stderr = (stderr + chunk.toString()).slice(-4096)));
+		child.once("error", (e) => console.error(`${TAG} ${hcBin} kill ${target}: ${e.message}`));
+		child.once("close", (code, signal) => {
+			if (code === 0) {
+				removeFinishedTerminal(hcBin, target);
+				return;
+			}
+			console.error(
+				`${TAG} ${hcBin} kill ${target}: ${stderr.trim() || (signal ? `terminated by ${signal}` : `exit code ${code}`)}`,
+			);
+		});
+	} catch (e) {
+		console.error(`${TAG} ${hcBin} kill ${target}: ${e instanceof Error ? e.message : e}`);
+	}
+}
+
+/** Close and forget one tracked terminal; logs when neither address nor
+ *  name is known (herdr-core auto-assigned the name). */
+function closeBinding(hcBin: string, key: string, binding: { name: string | null; address?: string }): void {
+	const target = binding.address ?? binding.name;
+	if (!target) {
+		console.error(`${TAG} autoclose skipped for ${key}: no tracked address or name`);
+		return;
+	}
+	closeInspectorTerminal(hcBin, target);
 }
 
 /** Narrow the untyped event-bus payload to the fields auto-open needs. */
@@ -321,6 +441,17 @@ function asyncStartedRun(data: unknown): AsyncStartedRun | undefined {
 		asyncDir: event.asyncDir,
 		...(typeof event.cwd === "string" && event.cwd ? { cwd: event.cwd } : {}),
 	};
+}
+
+/** Narrow `subagent:async-complete` to its run id: the payload carries
+ *  `runId` (and an `id` spelling of the same); anything else → ignore. */
+function asyncCompleteRunId(data: unknown): string | undefined {
+	if (typeof data !== "object" || data === null) return undefined;
+	const event = data as { runId?: unknown; id?: unknown };
+	for (const candidate of [event.runId, event.id]) {
+		if (typeof candidate === "string" && candidate) return candidate;
+	}
+	return undefined;
 }
 
 /** Inspector plugin handed to pi-subagents: drives herdr-core terminals
@@ -357,7 +488,7 @@ const inspectorPlugin = {
 						key,
 						name: terminalName(context.target.runId, context.target.index),
 						cwd: context.target.status.cwd ?? context.cwd,
-						command: [launch.executable, ...launch.argv],
+						command: wrapLaunchCommand(launch),
 						signal: context.signal,
 						onOutcome: (outcomeOk, outcomeDetail, name) =>
 							resolve([outcomeOk, outcomeDetail, name]),
@@ -377,7 +508,7 @@ const inspectorPlugin = {
 		if (!binding) {
 			return reply(`No herdr-core inspector terminal is tracked for async run ${context.target.runId}.`);
 		}
-		const where = binding.name ? `terminal ${binding.name}` : "an auto-named terminal";
+		const where = binding.address ?? binding.name ?? "an auto-named terminal";
 		return reply(
 			`herdr-core inspector ${where} is open for async run ${context.target.runId}.\nRun state: ${context.target.status.state}`,
 		);
@@ -389,21 +520,22 @@ const inspectorPlugin = {
 			return reply(`No herdr-core inspector terminal is tracked for async run ${context.target.runId}.`);
 		}
 		bindings.delete(key);
-		if (!binding.name) {
+		const target = binding.address ?? binding.name;
+		if (!target) {
 			return reply(
-				`The herdr-core inspector for async run ${context.target.runId} has no tracked name (herdr-core assigned it); close the terminal in the herdr UI. The subagent run was not stopped.`,
+				`The herdr-core inspector for async run ${context.target.runId} has no tracked address or name (herdr-core assigned it); close the terminal in the herdr UI. The subagent run was not stopped.`,
 			);
 		}
 		const hcBin = resolveHcBin();
 		if (!hcBin) {
 			return reply(
-				`Cannot close herdr-core terminal ${binding.name}: herdr-core binary not available. Close it in the herdr UI. The subagent run was not stopped.`,
+				`Cannot close herdr-core terminal ${target}: herdr-core binary not available. Close it in the herdr UI. The subagent run was not stopped.`,
 				true,
 			);
 		}
-		killInspectorTerminal(hcBin, binding.name);
+		closeInspectorTerminal(hcBin, target);
 		return reply(
-			`Closed herdr-core inspector terminal ${binding.name} for async run ${context.target.runId}. The subagent run was not stopped.`,
+			`Closed herdr-core inspector terminal ${target} for async run ${context.target.runId}. The subagent run was not stopped.`,
 		);
 	},
 };
@@ -445,8 +577,7 @@ export default function (pi: ExtensionAPI) {
 				name: terminalName(run.id),
 				cwd: run.cwd,
 				command: [
-					process.execPath,
-					runner,
+					...inspectorCommandPrefix(runner),
 					"--async-dir",
 					run.asyncDir,
 					"--run-id",
@@ -457,6 +588,29 @@ export default function (pi: ExtensionAPI) {
 			});
 		} catch (e) {
 			console.error(`${TAG} auto-open failed: ${e instanceof Error ? e.message : e}`);
+		}
+	});
+
+	// Auto-close the run's terminal(s) once the run completes: kill makes
+	// the finished dashboard disappear from the herdr UI, rm drops it from
+	// the core. Covers the root binding and any chain-child inspectors of
+	// the same run (keys `<runId>|…`).
+	pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data: unknown) => {
+		try {
+			if (!autocloseEnabled(process.env) || bindings.size === 0) return;
+			const runId = asyncCompleteRunId(data);
+			if (!runId) return; // unknown shape → ignore, like async-started
+			const hcBin = resolveHcBin();
+			if (!hcBin) return;
+			const prefix = `${runId}|`;
+			for (const key of [...bindings.keys()]) {
+				if (!key.startsWith(prefix)) continue;
+				const binding = bindings.get(key);
+				bindings.delete(key);
+				if (binding) closeBinding(hcBin, key, binding);
+			}
+		} catch (e) {
+			console.error(`${TAG} autoclose failed: ${e instanceof Error ? e.message : e}`);
 		}
 	});
 
@@ -480,5 +634,18 @@ export default function (pi: ExtensionAPI) {
 			console.warn(`${TAG} registration dispose: ${e instanceof Error ? e.message : e}`);
 		}
 		registration = undefined;
+		// Close every still-tracked terminal: the inspectors of an ended
+		// session must not linger in herdr-core.
+		try {
+			if (!autocloseEnabled(process.env) || bindings.size === 0) return;
+			const hcBin = resolveHcBin();
+			if (!hcBin) return;
+			for (const [key, binding] of [...bindings]) {
+				bindings.delete(key);
+				closeBinding(hcBin, key, binding);
+			}
+		} catch (e) {
+			console.error(`${TAG} shutdown autoclose failed: ${e instanceof Error ? e.message : e}`);
+		}
 	});
 }
