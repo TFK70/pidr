@@ -7,19 +7,25 @@
  * gives them a face in the herdr UI without touching pi-subagents:
  *
  * - auto-open: on the pi-subagents `subagent:async-started` event, start
- *   `<hc> run --bg --name pi-sub-<id> -- node <PI_SUBAGENTS_DIR>/inspector-runner.mjs
- *   --async-dir <dir> --run-id <id> --refresh-ms 1000` — a live read-only
- *   dashboard terminal parented to pi's own herdr terminal (`--parent`
- *   defaults to the launching terminal, which inside herdr is the pi panel).
- * - status: the inspector itself never reports, so its terminal would show
- *   no working/done state in the herdr agents sidebar. It therefore runs
- *   behind the sibling wrapper `herdr-subagent-monitor.mjs` (loaded in
- *   place from this flake source directory), which passes the dashboard
- *   through unchanged and translates `<asyncDir>/status.json` into the
- *   terminal's root OSC 7501 status (`state=…:app=pi-subagents:title=…`).
- *   herdr then also derives the parent's status from these terminals
- *   (a parent takes its most urgent sub-agent's place) — nothing extra is
- *   needed here for that.
+ *   `<hc> run --bg --name pi-sub-<alias> -- node <PI_SUBAGENTS_DIR>/inspector-runner.mjs
+ *   --async-dir <dir> --run-id <id> --refresh-ms 1000` behind this
+ *   directory's monitor — a live read-only transcript terminal parented to
+ *   pi's own herdr terminal (`--parent` defaults to the launching terminal,
+ *   which inside herdr is the pi panel). The alias is human-readable: the
+ *   workflow key / custom id the run was launched under, else the agent
+ *   name (see runAlias), not the raw run UUID.
+ * - transcript + status: herdr-subagent-monitor.mjs (loaded in place from
+ *   this flake source directory) renders the run's session JSONL with pi's
+ *   own TUI components (roles, thinking blocks, tool call/result blocks,
+ *   diff highlighting, theme — same look as the pi chat), tailing it live,
+ *   and translates `<asyncDir>/status.json` into the terminal's root
+ *   OSC 7501 status (`state=…:app=pi-subagents:title=…`). The pi package
+ *   for that rendering is resolved from PIDR_PI_PACKAGE_DIR (set by the
+ *   Nix wrapper) and passed as --pi-package-dir; without it the monitor
+ *   degrades to the classic plain-text inspector dashboard. herdr also
+ *   derives the parent's status from these terminals (a parent takes its
+ *   most urgent sub-agent's place) — nothing extra is needed here for
+ *   that.
  * - auto-close: on `subagent:async-complete` the run's terminal is closed
  *   fire-and-forget (`<hc> kill <address-or-name>` makes it finished,
  *   `<hc> rm <addr>` drops it from the core), and `session_shutdown`
@@ -72,15 +78,23 @@ const INSPECTOR_REGISTER_EVENT = "pi-subagents:inspector-register:v1";
 const PLUGIN_NAME = "pidr-herdr-core";
 
 /** herdr-core terminal names: 1–32 chars of a-z 0-9 - _ (lowercase only),
- *  unique among live terminals. The prefix must fit plus a sanitized id. */
+ *  unique among live terminals. Named after the run's human-readable alias
+ *  (see runAlias) — the alias must fit plus a sanitized suffix. */
 const NAME_PREFIX = "pi-sub-";
 const NAME_MAX = 32;
+const SHORT_ID_LEN = 6;
 
-/** Payload of `subagent:async-started` — only the fields used here. */
+/** Payload of `subagent:async-started` — only the fields used here. The
+ *  event carries no explicit "requested id" field: plain subagent() launches
+ *  always get a UUID run id, but workflow children (runs.run(key, …)) report
+ *  their key as `workflowKey`, and mission-bound children run under a custom
+ *  non-UUID id; `agent` is the first agent's name. */
 interface AsyncStartedRun {
 	id: string;
 	asyncDir: string;
 	cwd?: string;
+	agent?: string;
+	workflowKey?: string;
 }
 
 /** Minimal restatement of pi-subagents' inspector contracts
@@ -89,7 +103,7 @@ interface InspectorTarget {
 	runId: string;
 	asyncDir: string;
 	index?: number;
-	status: { cwd?: string; state: string };
+	status: { cwd?: string; state: string; agent?: string; workflowKey?: string };
 }
 
 interface InspectorContext {
@@ -216,9 +230,23 @@ function monitorPath(): string | undefined {
 	}
 }
 
+/** The pi package whose TUI components the monitor renders transcripts
+ *  with (path injected by the Nix wrapper via PIDR_PI_PACKAGE_DIR). Missing
+ *  → undefined: the monitor then degrades to the classic dashboard. */
+function piPackageDir(): string | undefined {
+	const dir = process.env.PIDR_PI_PACKAGE_DIR?.trim();
+	if (!dir) return undefined;
+	try {
+		return existsSync(join(dir, "dist", "index.js")) ? dir : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Command prefix running the inspector behind the status monitor:
- *  `node <monitor> --runner <inspector-runner>`; without a monitor, the
- *  bare `node <inspector-runner>` (reported once, then silent). */
+ *  `node <monitor> --runner <inspector-runner> [--pi-package-dir <dir>]`;
+ *  without a monitor, the bare `node <inspector-runner>` (reported once,
+ *  then silent). */
 function inspectorCommandPrefix(runner: string): string[] {
 	const monitor = monitorPath();
 	if (!monitor) {
@@ -227,7 +255,10 @@ function inspectorCommandPrefix(runner: string): string[] {
 		);
 		return [process.execPath, runner];
 	}
-	return [process.execPath, monitor, "--runner", runner];
+	const prefix = [process.execPath, monitor, "--runner", runner];
+	const piDir = piPackageDir();
+	if (piDir) prefix.push("--pi-package-dir", piDir);
+	return prefix;
 }
 
 /** Wrap a pi-subagents inspector launch (executable + argv, argv[0] being
@@ -235,25 +266,17 @@ function inspectorCommandPrefix(runner: string): string[] {
 function wrapLaunchCommand(launch: InspectorLaunch): string[] {
 	const monitor = monitorPath();
 	if (!monitor || launch.argv.length === 0) return [launch.executable, ...launch.argv];
-	return [launch.executable, monitor, "--runner", launch.argv[0], ...launch.argv.slice(1)];
+	const wrapped = [launch.executable, monitor, "--runner", launch.argv[0]];
+	const piDir = piPackageDir();
+	if (piDir) wrapped.push("--pi-package-dir", piDir);
+	wrapped.push(...launch.argv.slice(1));
+	return wrapped;
 }
 
 /** Binding key: run id plus the child index of a chain step (the root
  *  inspector of a run has none). */
 function targetKey(runId: string, index: number | undefined): string {
 	return `${runId}|${index ?? ""}`;
-}
-
-/** `pi-sub-<sanitized run id>` inside herdr-core's 32-char a-z0-9-_ name
- *  budget; a child inspector of a chain run also carries its step index. */
-function terminalName(runId: string, index?: number): string {
-	const suffix = index === undefined ? "" : `-${index}`;
-	const budget = NAME_MAX - NAME_PREFIX.length - suffix.length;
-	const id = runId
-		.toLowerCase()
-		.replace(/[^a-z0-9-]/g, "-")
-		.slice(0, Math.max(0, budget));
-	return NAME_PREFIX + id + suffix;
 }
 
 /** AgentToolResult-shaped reply, mirroring the builtin inspector plugins. */
@@ -267,6 +290,8 @@ function reply(text: string, isError = false): InspectorReply {
 
 interface TerminalLaunch {
 	name?: string;
+	/** Second name to try when `name` clashes with a live terminal. */
+	fallbackName?: string;
 	cwd?: string;
 	command: readonly string[];
 	signal?: AbortSignal;
@@ -337,10 +362,11 @@ interface TrackedOpen extends TerminalLaunch {
 
 /** Open and track an inspector terminal. The binding is recorded up front
  *  (a racing inspector.open for the same target then sees it and does not
- *  spawn a duplicate), downgraded to unnamed when the chosen name clashes
- *  with a live terminal, and rolled back when the terminal never starts.
- *  On success the binding keeps the terminal address from the run output —
- *  auto-close targets it before the name. */
+ *  spawn a duplicate), retried with the fallback name when the chosen name
+ *  clashes with a live terminal (two runs can share an alias), then with no
+ *  name at all (herdr-core assigns one), and rolled back when the terminal
+ *  never starts. On success the binding keeps the terminal address from the
+ *  run output — auto-close targets it before the name. */
 function openTrackedInspectorTerminal(open: TrackedOpen): void {
 	bindings.set(open.key, { name: open.name ?? null });
 	const attempt = (name: string | undefined) => {
@@ -349,11 +375,13 @@ function openTrackedInspectorTerminal(open: TrackedOpen): void {
 			{ name, cwd: open.cwd, command: open.command, signal: open.signal },
 			(ok, detail, runStdout) => {
 				if (!ok && name !== undefined && !open.signal?.aborted) {
-					// The name is taken by a live terminal (e.g. a leftover
-					// inspector from an earlier pi session): retry once and
-					// let herdr-core assign its own name.
-					bindings.set(open.key, { name: null });
-					attempt(undefined);
+					// The name is taken by a live terminal (e.g. a parallel run
+					// with the same alias, or a leftover inspector from an
+					// earlier pi session): try the discriminated fallback name,
+					// then let herdr-core assign its own name.
+					const next = name === open.name ? open.fallbackName : undefined;
+					bindings.set(open.key, { name: next ?? null });
+					attempt(next);
 					return;
 				}
 				if (ok) {
@@ -433,13 +461,66 @@ function closeBinding(hcBin: string, key: string, binding: { name: string | null
 /** Narrow the untyped event-bus payload to the fields auto-open needs. */
 function asyncStartedRun(data: unknown): AsyncStartedRun | undefined {
 	if (typeof data !== "object" || data === null) return undefined;
-	const event = data as { id?: unknown; asyncDir?: unknown; cwd?: unknown };
+	const event = data as { id?: unknown; asyncDir?: unknown; cwd?: unknown; agent?: unknown; workflowKey?: unknown };
 	if (typeof event.id !== "string" || !event.id) return undefined;
 	if (typeof event.asyncDir !== "string" || !event.asyncDir) return undefined;
 	return {
 		id: event.id,
 		asyncDir: event.asyncDir,
 		...(typeof event.cwd === "string" && event.cwd ? { cwd: event.cwd } : {}),
+		...(typeof event.agent === "string" && event.agent ? { agent: event.agent } : {}),
+		...(typeof event.workflowKey === "string" && event.workflowKey ? { workflowKey: event.workflowKey } : {}),
+	};
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Human-readable alias for a run: the workflow key (the id the caller passed
+ *  to runs.run), else a custom non-UUID run id (mission-bound children), else
+ *  the agent name, else a short id prefix. */
+function runAlias(run: { id: string; agent?: string; workflowKey?: string }): string {
+	const workflowKey = run.workflowKey?.trim();
+	if (workflowKey) return workflowKey;
+	if (!UUID_RE.test(run.id)) return run.id;
+	return run.agent?.trim() || run.id.slice(0, SHORT_ID_LEN);
+}
+
+/** Alias for an inspector target (no event payload there): the workflow key
+ *  or agent name recorded in the run's status.json, else a short id prefix. */
+function targetAlias(target: InspectorTarget): string {
+	const workflowKey = target.status.workflowKey?.trim();
+	if (workflowKey) return workflowKey;
+	return target.status.agent?.trim() || target.runId.slice(0, SHORT_ID_LEN);
+}
+
+/** `pi-sub-<sanitized alias>` inside herdr-core's 32-char a-z0-9-_ name
+ *  budget; a child inspector of a chain run also carries its step index. */
+function terminalName(alias: string, index?: number): string {
+	const suffix = index === undefined ? "" : `-${index}`;
+	const budget = NAME_MAX - NAME_PREFIX.length - suffix.length;
+	const slug = alias
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, Math.max(0, budget));
+	return NAME_PREFIX + (slug || "run") + suffix;
+}
+
+/** Terminal names for one run: the pretty alias, and the same alias plus a
+ *  short run-id suffix as the clash fallback (the alias is pre-truncated so
+ *  the discriminator always survives the 32-char budget). */
+function terminalNames(
+	alias: string,
+	runId: string,
+	index?: number,
+): { name: string; fallbackName: string } {
+	const suffixLen = index === undefined ? 0 : String(index).length + 1;
+	const budget = Math.max(0, NAME_MAX - NAME_PREFIX.length - suffixLen - (1 + SHORT_ID_LEN));
+	const short = alias.length > budget ? alias.slice(0, budget) : alias;
+	return {
+		name: terminalName(alias, index),
+		fallbackName: terminalName(`${short}-${runId.slice(0, SHORT_ID_LEN)}`, index),
 	};
 }
 
@@ -481,12 +562,15 @@ const inspectorPlugin = {
 			}
 			// params.focus is ignored: herdr-core's `run` has no focus switch;
 			// the new terminal is selected in the herdr UI.
+			const alias = targetAlias(context.target);
+			const names = terminalNames(alias, context.target.runId, context.target.index);
 			const [ok, detail, usedName] = await new Promise<[boolean, string, string | undefined]>(
 				(resolve) => {
 					openTrackedInspectorTerminal({
 						hcBin,
 						key,
-						name: terminalName(context.target.runId, context.target.index),
+						name: names.name,
+						fallbackName: names.fallbackName,
 						cwd: context.target.status.cwd ?? context.cwd,
 						command: wrapLaunchCommand(launch),
 						signal: context.signal,
@@ -571,10 +655,12 @@ export default function (pi: ExtensionAPI) {
 			seenRuns.add(run.id);
 			const hcBin = resolveHcBin();
 			if (!hcBin) return;
+			const names = terminalNames(runAlias(run), run.id, undefined);
 			openTrackedInspectorTerminal({
 				hcBin,
 				key: targetKey(run.id, undefined),
-				name: terminalName(run.id),
+				name: names.name,
+				fallbackName: names.fallbackName,
 				cwd: run.cwd,
 				command: [
 					...inspectorCommandPrefix(runner),

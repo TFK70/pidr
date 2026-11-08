@@ -111,6 +111,7 @@
           wrapProgram "$out/bin/pi" \
             --set PIDR_REV "${self.rev or self.dirtyRev}" \
             --set PI_SUBAGENTS_DIR "${pi-subagents}" \
+            --set PIDR_PI_PACKAGE_DIR "${pi}/lib/pi/node_modules/@earendil-works/pi-coding-agent" \
             --add-flags "${lib.concatMapStringsSep " " (e: "-e ${e}") bundledExtensions}"
         '';
         meta.mainProgram = "pi";

@@ -16,9 +16,11 @@ extensions/          # pi extensions bundled into the pidr package
   claude-bridge.ts    # bridges Claude configs (.mcp.json, CLAUDE.md) into pi
   pidr-mcp-kubernetes.ts # registers the homelab kubernetes MCP server
   pidr-herdr-subagents/ # exposes pi-subagents runs as herdr-core (hc) inspector terminals:
-    pidr-herdr-subagents.ts # extension: auto-open, status via OSC 7501, auto-close; no panes
-    herdr-subagent-monitor.mjs # terminal-side wrapper: reports working/done (OSC 7501)
-                         # from the run's status.json while streaming the inspector dashboard
+    pidr-herdr-subagents.ts # extension: alias-named auto-open (pi-sub-<alias>), OSC 7501, auto-close; no panes
+    herdr-subagent-monitor.mjs # terminal-side program: renders the run's session JSONL as a native
+                         # pi TUI transcript (roles, thinking, tool blocks, diff, theme) via
+                         # PIDR_PI_PACKAGE_DIR, tails it live, keeps steer/stop controls and reports
+                         # working/done (OSC 7501) from the run's status.json
 package/             # pi package bundled into pidr (prompt templates, skills)
   prompts/careful.md # /careful — cautious-mode prompt template
   prompts/comparative-research.md # /comparative-research — deep comparative research via the skill
