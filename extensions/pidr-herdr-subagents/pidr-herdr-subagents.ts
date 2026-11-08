@@ -11,9 +11,10 @@
  *   --async-dir <dir> --run-id <id> --refresh-ms 1000` behind this
  *   directory's monitor — a live read-only transcript terminal parented to
  *   pi's own herdr terminal (`--parent` defaults to the launching terminal,
- *   which inside herdr is the pi panel). The alias is human-readable: the
- *   workflow key / custom id the run was launched under, else the agent
- *   name (see runAlias), not the raw run UUID.
+ *   which inside herdr is the pi panel). The alias is human-readable and
+ *   taken from the id the caller passed to subagent() (tracked from the
+ *   spawning tool call), the workflow key / custom id the run was launched
+ *   under, or the agent name (see runAlias) — never the raw run UUID.
  * - transcript + status: herdr-subagent-monitor.mjs (loaded in place from
  *   this flake source directory) renders the run's session JSONL with pi's
  *   own TUI components (roles, thinking blocks, tool call/result blocks,
@@ -86,15 +87,20 @@ const SHORT_ID_LEN = 6;
 
 /** Payload of `subagent:async-started` — only the fields used here. The
  *  event carries no explicit "requested id" field: plain subagent() launches
- *  always get a UUID run id, but workflow children (runs.run(key, …)) report
- *  their key as `workflowKey`, and mission-bound children run under a custom
- *  non-UUID id; `agent` is the first agent's name. */
+ *  always get a UUID run id and pi-subagents never persists the caller's
+ *  top-level `id` param. The requested id is instead recovered from the
+ *  spawning tool call (see requestedAliasFor): the single-mode emission
+ *  carries `toolCallId`, matched against `tool_execution_start` args. Other
+ *  human-readable fields: workflow children (runs.run(key, …)) report their
+ *  key as `workflowKey`, mission-bound children run under a custom non-UUID
+ *  id, and `agent` is the first agent's name. */
 interface AsyncStartedRun {
 	id: string;
 	asyncDir: string;
 	cwd?: string;
 	agent?: string;
 	workflowKey?: string;
+	toolCallId?: string;
 }
 
 /** Minimal restatement of pi-subagents' inspector contracts
@@ -149,6 +155,14 @@ const bindings = new Map<string, { name: string | null; address?: string }>();
 
 /** Run ids that already got an auto-opened terminal (one per run). */
 const seenRuns = new Set<string>();
+
+/** The `id` (or `runId`) param of in-flight subagent() tool calls, keyed by
+ *  the call's toolCallId — the only place pi-subagents ever sees the
+ *  caller-requested id (it is not persisted in the run's artifacts and not
+ *  emitted in subagent:async-started). Bounded; entries are dropped when the
+ *  call ends. */
+const requestedIds = new Map<string, string>();
+const REQUESTED_IDS_MAX = 64;
 
 /** Active registration, released on session_shutdown. */
 let registration: InspectorRegistration | undefined;
@@ -461,7 +475,14 @@ function closeBinding(hcBin: string, key: string, binding: { name: string | null
 /** Narrow the untyped event-bus payload to the fields auto-open needs. */
 function asyncStartedRun(data: unknown): AsyncStartedRun | undefined {
 	if (typeof data !== "object" || data === null) return undefined;
-	const event = data as { id?: unknown; asyncDir?: unknown; cwd?: unknown; agent?: unknown; workflowKey?: unknown };
+	const event = data as {
+		id?: unknown;
+		asyncDir?: unknown;
+		cwd?: unknown;
+		agent?: unknown;
+		workflowKey?: unknown;
+		toolCallId?: unknown;
+	};
 	if (typeof event.id !== "string" || !event.id) return undefined;
 	if (typeof event.asyncDir !== "string" || !event.asyncDir) return undefined;
 	return {
@@ -470,15 +491,29 @@ function asyncStartedRun(data: unknown): AsyncStartedRun | undefined {
 		...(typeof event.cwd === "string" && event.cwd ? { cwd: event.cwd } : {}),
 		...(typeof event.agent === "string" && event.agent ? { agent: event.agent } : {}),
 		...(typeof event.workflowKey === "string" && event.workflowKey ? { workflowKey: event.workflowKey } : {}),
+		...(typeof event.toolCallId === "string" && event.toolCallId ? { toolCallId: event.toolCallId } : {}),
 	};
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Human-readable alias for a run: the workflow key (the id the caller passed
- *  to runs.run), else a custom non-UUID run id (mission-bound children), else
- *  the agent name, else a short id prefix. */
-function runAlias(run: { id: string; agent?: string; workflowKey?: string }): string {
+/** The id the caller passed to subagent() for the tool call that spawned this
+ *  run, when that call is still tracked; a plain UUID id carries no display
+ *  value (it is just a generated run id), so it is ignored like a UUID run
+ *  id in runAlias(). */
+function requestedAliasFor(run: AsyncStartedRun): string | undefined {
+	const requested = run.toolCallId !== undefined ? requestedIds.get(run.toolCallId) : undefined;
+	const id = requested?.trim();
+	return id && !UUID_RE.test(id) ? id : undefined;
+}
+
+/** Human-readable alias for a run: the id the caller passed to subagent()
+ *  (tracked from the tool call), else the workflow key (runs.run(key, …)),
+ *  else a custom non-UUID run id (mission-bound children), else the agent
+ *  name, else a short id prefix. */
+function runAlias(run: AsyncStartedRun): string {
+	const requested = requestedAliasFor(run);
+	if (requested) return requested;
 	const workflowKey = run.workflowKey?.trim();
 	if (workflowKey) return workflowKey;
 	if (!UUID_RE.test(run.id)) return run.id;
@@ -642,6 +677,32 @@ function registerInspectorPlugin(pi: ExtensionAPI): InspectorRegistration | unde
 }
 
 export default function (pi: ExtensionAPI) {
+	// Track the caller-requested id of in-flight subagent() calls: pi-subagents
+	// never persists or emits that id, but the spawning tool call's args carry
+	// it and subagent:async-started (single mode) reports the call's toolCallId.
+	// Without this, a subagent({ id: "live-check", … }) launch can only be named
+	// after its agent (pi-sub-worker), not pi-sub-live-check.
+	pi.on("tool_execution_start", async (event: { toolName?: string; toolCallId?: string; args?: unknown }) => {
+		try {
+			if (event.toolName !== "subagent" || typeof event.toolCallId !== "string" || !event.toolCallId) return;
+			const args = event.args;
+			if (typeof args !== "object" || args === null) return;
+			const requested = (args as { id?: unknown; runId?: unknown }).id ?? (args as { runId?: unknown }).runId;
+			if (typeof requested !== "string" || !requested.trim()) return;
+			requestedIds.set(event.toolCallId, requested);
+			while (requestedIds.size > REQUESTED_IDS_MAX) {
+				const oldest = requestedIds.keys().next().value;
+				if (oldest === undefined) break;
+				requestedIds.delete(oldest);
+			}
+		} catch {
+			// tracking must never affect the tool call
+		}
+	});
+	pi.on("tool_execution_end", async (event: { toolCallId?: string }) => {
+		if (typeof event.toolCallId === "string") requestedIds.delete(event.toolCallId);
+	});
+
 	// Auto-open a dashboard terminal for every background subagent run. The
 	// handler stays synchronous and never throws: pi-subagents emits this
 	// from inside its own tool execution.
