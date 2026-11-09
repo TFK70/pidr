@@ -45,6 +45,12 @@
  *   OSC 7501); without a runner it shows the run header and status only.
  *   Render errors never kill the process — a failed block becomes an error
  *   line in the transcript.
+ * - never outlives its run: once status.json reports a terminal state
+ *   (complete/failed/partial/rejected/stopped) the monitor exits after a
+ *   grace period (30s normally, 15min with PIDR_HERDR_AUTOCLOSE=0) — the
+ *   parent's auto-close usually kills the terminal first, this is the net
+ *   for dead parents and failed closes; a closed stdin exits immediately.
+ *   The fallback mode kills its inspector child on the way out.
  *
  * The exit mirrors the child's in fallback mode: same exit code, or the same
  * signal. Closing the terminal when the run completes is the parent
@@ -75,6 +81,14 @@ const MAX_TITLE_BYTES = 192;
 const MAX_MSG_BYTES = 1_024;
 const OUTPUT_PAD = 1; // pi's default output padding (SETTINGS_DEFAULTS.outputPad)
 const CHROME_LINES = 6; // header(2) + blank + blank + hint + prompt
+/** Self-exit: the monitor must not outlive its run. Once the run reaches a
+ *  terminal state it exits after a grace period (the parent extension's
+ *  auto-close normally kills the terminal within a second — this is the net
+ *  for a dead parent, a failed close, or PIDR_HERDR_AUTOCLOSE=0, which gets
+ *  a much longer grace so the user can still inspect the finished run). */
+const EXIT_GRACE_MS = 30_000;
+const EXIT_GRACE_KEEP_MS = 15 * 60_000;
+const EXIT_STATES = new Set(["complete", "failed", "partial", "rejected", "stopped"]);
 
 /** Control inbox layout of pi-subagents v0.80.0 (src/runs/background/control-channel.js). */
 const CONTROL_DIR = "control";
@@ -640,6 +654,39 @@ const piPackageDir = args.get("--pi-package-dir") ?? process.env.PIDR_PI_PACKAGE
 const statusPath = join(asyncDir, "status.json");
 let lastStatus; // most recent status.json payload (also used by controls)
 
+/** Shared self-exit arming (see EXIT_GRACE_MS). `onExit` runs instead of a
+ *  bare exit so the fallback mode can kill its runner child first. */
+function makeRunExit(onExit) {
+	let timer;
+	return {
+		update(state) {
+			const terminal = EXIT_STATES.has(state);
+			if (terminal && timer === undefined) {
+				const grace = process.env.PIDR_HERDR_AUTOCLOSE === "0" ? EXIT_GRACE_KEEP_MS : EXIT_GRACE_MS;
+				try {
+					process.stderr.write(
+						`[pidr-monitor] run ${runId} is ${state}; exiting in ${Math.round(grace / 1000)}s\n`,
+					);
+				} catch {
+					// stderr gone: exiting anyway
+				}
+				timer = setTimeout(() => {
+					try {
+						onExit();
+					} finally {
+						process.exit(0);
+				}
+				}, grace);
+				timer.unref?.();
+			} else if (!terminal && timer !== undefined) {
+				// revived or re-classified: keep serving
+				clearTimeout(timer);
+				timer = undefined;
+			}
+		},
+	};
+}
+
 /** Root OSC 7501 report from status.json (unchanged behavior), overridden to
  *  `blocked` while the followed transcript has an unanswered
  *  ask_user_question: a subagent waiting on the user must not read as
@@ -736,10 +783,24 @@ function handleControl(line) {
 // ---------------------------------------------------------------------------
 
 function runFallbackDashboard() {
-	reportFrom(readStatus(statusPath, runId));
+	let child;
+	const runExit = makeRunExit(() => {
+		// the inspector child would outlive this wrapper: take it with us
+		try {
+			child?.kill();
+		} catch {
+			// already gone
+		}
+	});
+	const tickReport = () => {
+		const status = readStatus(statusPath, runId);
+		reportFrom(status);
+		runExit.update(String(status?.state ?? ""));
+	};
+	tickReport();
 	const timer = setInterval(() => {
 		try {
-			reportFrom(readStatus(statusPath, runId));
+			tickReport();
 		} catch {
 			// polling must never kill the terminal
 		}
@@ -757,7 +818,7 @@ function runFallbackDashboard() {
 	const passthrough = [...argv];
 	const at = passthrough.indexOf("--runner");
 	if (at !== -1) passthrough.splice(at, 2);
-	const child = spawn(process.execPath, [runner, ...passthrough], { stdio: "inherit" });
+	child = spawn(process.execPath, [runner, ...passthrough], { stdio: "inherit" });
 	child.once("close", (code, signal) => {
 		clearInterval(timer);
 		if (signal) {
@@ -832,6 +893,8 @@ async function runNative(piModule) {
 		}
 	};
 
+	const runExit = makeRunExit(() => {});
+
 	const tick = () => {
 		try {
 			const status = readStatus(statusPath, runId);
@@ -844,6 +907,7 @@ async function runNative(piModule) {
 			}
 			for (const entry of tail.poll()) renderer.applyEntry(entry);
 			reportFrom(status, renderer.pendingQuestion());
+			runExit.update(String(status?.state ?? ""));
 			paint(false);
 		} catch {
 			// polling must never kill the terminal
@@ -860,7 +924,10 @@ async function runNative(piModule) {
 		tick();
 	});
 	rl.on("close", () => {
-		// stdin gone (terminal closed): nothing more to serve
+		// stdin is gone (the herdr terminal is closing): nothing left to
+		// serve, and no reader will ever steer or stop — exit now instead of
+		// polling a finished terminal forever.
+		process.exit(0);
 	});
 
 	process.stdout.on?.("resize", () => {

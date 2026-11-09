@@ -31,7 +31,14 @@
  *   fire-and-forget (`<hc> kill <address-or-name>` makes it finished,
  *   `<hc> rm <addr>` drops it from the core), and `session_shutdown`
  *   closes every still-tracked terminal so inspectors of an ended session
- *   do not linger. PIDR_HERDR_AUTOCLOSE=0 keeps them open instead.
+ *   do not linger. PIDR_HERDR_AUTOCLOSE=0 keeps them open instead. As a net
+ *   for sessions that died before closing (OOM-kill, crash), the first
+ *   session_start sweeps monitor terminals of finished runs: monitors are
+ *   spawned with a `pidr-run=<runId>` label, and every async run in a
+ *   terminal state older than a few minutes gets its labelled terminals
+ *   killed and removed. The monitor itself also exits once its run reaches
+ *   a terminal state (see herdr-subagent-monitor.mjs), so orphans cannot
+ *   outlive their runs by more than a grace period.
  * - inspector plugin: register `"pidr-herdr-core"` in pi-subagents'
  *   inspector registry (`pi-subagents:inspector-register:v1` on the
  *   `pi.events` bus), so explicit inspector.open/status/close drive the
@@ -59,7 +66,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { accessSync, constants, existsSync } from "node:fs";
+import { accessSync, constants, existsSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -306,6 +314,9 @@ interface TerminalLaunch {
 	name?: string;
 	/** Second name to try when `name` clashes with a live terminal. */
 	fallbackName?: string;
+	/** herdr-core terminal labels (`--label k=v`): let the orphan sweep find
+	 *  the terminal of a run without guessing from its display name. */
+	labels?: Record<string, string>;
 	cwd?: string;
 	command: readonly string[];
 	signal?: AbortSignal;
@@ -324,6 +335,7 @@ function launchInspectorTerminal(
 ): void {
 	const args = ["run", "--bg", "--json"];
 	if (launch.name) args.push("--name", launch.name);
+	for (const [key, value] of Object.entries(launch.labels ?? {})) args.push("--label", `${key}=${value}`);
 	if (launch.cwd) args.push("--cwd", launch.cwd);
 	args.push("--", ...launch.command);
 	let stdout = "";
@@ -386,7 +398,7 @@ function openTrackedInspectorTerminal(open: TrackedOpen): void {
 	const attempt = (name: string | undefined) => {
 		launchInspectorTerminal(
 			open.hcBin,
-			{ name, cwd: open.cwd, command: open.command, signal: open.signal },
+			{ name, labels: open.labels, cwd: open.cwd, command: open.command, signal: open.signal },
 			(ok, detail, runStdout) => {
 				if (!ok && name !== undefined && !open.signal?.aborted) {
 					// The name is taken by a live terminal (e.g. a parallel run
@@ -607,6 +619,7 @@ const inspectorPlugin = {
 						name: names.name,
 						fallbackName: names.fallbackName,
 						cwd: context.target.status.cwd ?? context.cwd,
+						labels: { "pidr-run": context.target.runId },
 						command: wrapLaunchCommand(launch),
 						signal: context.signal,
 						onOutcome: (outcomeOk, outcomeDetail, name) =>
@@ -676,6 +689,92 @@ function registerInspectorPlugin(pi: ExtensionAPI): InspectorRegistration | unde
 	return request.result.registration;
 }
 
+/** Terminal states whose monitor terminals the orphan sweep may close. */
+const SWEEP_TERMINAL_STATES = new Set(["complete", "failed", "partial", "rejected", "stopped"]);
+/** A finished run younger than this may still be closed by its live parent's
+ *  auto-close; the sweep must not race it. */
+const SWEEP_MIN_AGE_MS = 5 * 60_000;
+/** Bounds for the sweep: run directories examined and hc queries issued. */
+const SWEEP_MAX_RUNS = 100;
+
+/** The async-runs root, mirroring pi-subagents' TEMP_ROOT_DIR formula
+ *  (src/shared/types.js): PI_SUBAGENTS_TEMP_ROOT override, else
+ *  `<tmpdir>/pi-subagents-uid-<uid>`. */
+function asyncRunsRoot(): string {
+	const override = process.env.PI_SUBAGENTS_TEMP_ROOT?.trim();
+	if (override) return override;
+	const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+	return join(tmpdir(), `pi-subagents-uid-${uid}`);
+}
+
+interface SweptRun {
+	runId: string;
+	state: string;
+}
+
+/** Terminal-state async runs old enough that no live parent is still about
+ *  to close their terminals. Bounded; read-only on failure. */
+function collectSweepableRuns(): SweptRun[] {
+	const runs: SweptRun[] = [];
+	let entries: string[];
+	try {
+		entries = readdirSync(join(asyncRunsRoot(), "async-subagent-runs"));
+	} catch {
+		return runs; // no runs directory (or unreadable): nothing to sweep
+	}
+	const now = Date.now();
+	for (const entry of entries.slice(0, SWEEP_MAX_RUNS)) {
+		try {
+			const status = JSON.parse(readFileSync(join(asyncRunsRoot(), "async-subagent-runs", entry, "status.json"), "utf8")) as {
+				runId?: unknown;
+				state?: unknown;
+				endedAt?: unknown;
+			};
+			if (typeof status.runId !== "string" || !SWEEP_TERMINAL_STATES.has(String(status.state))) continue;
+			// no endedAt (torn write) → treat as old: the state is terminal
+			const age = typeof status.endedAt === "number" ? now - status.endedAt : Number.POSITIVE_INFINITY;
+			if (age < SWEEP_MIN_AGE_MS) continue;
+			runs.push({ runId: status.runId, state: String(status.state) });
+		} catch {
+			// unreadable or torn status.json: not sweepable
+		}
+	}
+	return runs;
+}
+
+/** Close every live herdr terminal labelled for one of the finished runs —
+ *  the monitors of runs whose parent session died before auto-closing them
+ *  (OOM-kill, crash). Fire-and-forget, bounded, best-effort: `hc ls --label
+ *  pidr-run=<id>` finds exactly our terminals, `kill`+`rm` closes them. */
+function sweepOrphanMonitorTerminals(hcBin: string): void {
+	try {
+		const runs = collectSweepableRuns();
+		for (const run of runs) {
+			let stdout = "";
+			const child = spawn(hcBin, ["ls", "--json", "--label", `pidr-run=${run.runId}`], {
+				stdio: ["ignore", "pipe", "ignore"],
+				timeout: 10_000,
+			});
+			child.stdout?.on("data", (chunk: Buffer) => (stdout = (stdout + chunk.toString()).slice(-65536)));
+			child.once("error", () => {});
+			child.once("close", () => {
+				try {
+					const parsed = JSON.parse(stdout) as { terminals?: Array<{ address?: unknown; state?: unknown }> };
+					for (const terminal of parsed.terminals ?? []) {
+						if (typeof terminal.address !== "string" || terminal.state !== "live") continue;
+						console.warn(`${TAG} sweeping orphan monitor terminal ${terminal.address} (run ${run.runId} is ${run.state})`);
+						closeInspectorTerminal(hcBin, terminal.address);
+					}
+				} catch {
+					// malformed ls output: skip this run
+				}
+			});
+		}
+	} catch (e) {
+		console.warn(`${TAG} orphan sweep failed: ${e instanceof Error ? e.message : e}`);
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	// Track the caller-requested id of in-flight subagent() calls: pi-subagents
 	// never persists or emits that id, but the spawning tool call's args carry
@@ -722,6 +821,7 @@ export default function (pi: ExtensionAPI) {
 				key: targetKey(run.id, undefined),
 				name: names.name,
 				fallbackName: names.fallbackName,
+				labels: { "pidr-run": run.id },
 				cwd: run.cwd,
 				command: [
 					...inspectorCommandPrefix(runner),
@@ -764,14 +864,23 @@ export default function (pi: ExtensionAPI) {
 	// Register the inspector plugin once a session runs. pi-subagents
 	// installs its registry listener at extension load time, so it is
 	// already listening by the first session_start; re-registrations after
-	// a shutdown would be rejected as duplicates, hence the guard.
+	// a shutdown would be rejected as duplicates, hence the guard. The same
+	// first session_start sweeps monitor terminals orphaned by earlier pi
+	// sessions that died (OOM-kill, crash) before auto-closing them.
+	let swept = false;
 	pi.on("session_start", async () => {
-		if (registration || !extensionActive(process.env)) return;
-		try {
-			registration = registerInspectorPlugin(pi);
-		} catch (e) {
-			console.error(`${TAG} inspector registration failed: ${e instanceof Error ? e.message : e}`);
+		if (!extensionActive(process.env)) return;
+		if (!registration) {
+			try {
+				registration = registerInspectorPlugin(pi);
+			} catch (e) {
+				console.error(`${TAG} inspector registration failed: ${e instanceof Error ? e.message : e}`);
+			}
 		}
+		if (swept || !autocloseEnabled(process.env)) return;
+		swept = true;
+		const hcBin = resolveHcBin();
+		if (hcBin) sweepOrphanMonitorTerminals(hcBin);
 	});
 
 	pi.on("session_shutdown", async () => {
