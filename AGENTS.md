@@ -15,12 +15,15 @@ extensions/          # pi extensions bundled into the pidr package
   pidr-splash.ts      # startup splash: lists active extensions and MCP servers
   claude-bridge.ts    # bridges Claude configs (.mcp.json, CLAUDE.md) into pi
   pidr-mcp-kubernetes.ts # registers the homelab kubernetes MCP server
+  pidr-herdr-needs-you.ts # reports OSC 7501 blocked ("needs you" in herdr) while
+                         # ask_user_question waits for the user, working after
   pidr-herdr-subagents/ # exposes pi-subagents runs as herdr-core (hc) inspector terminals:
     pidr-herdr-subagents.ts # extension: alias-named auto-open (pi-sub-<alias>), OSC 7501, auto-close; no panes
     herdr-subagent-monitor.mjs # terminal-side program: renders the run's session JSONL as a native
                          # pi TUI transcript (roles, thinking, tool blocks, diff, theme) via
-                         # PIDR_PI_PACKAGE_DIR, tails it live, keeps steer/stop controls and reports
-                         # working/done (OSC 7501) from the run's status.json
+                         # PIDR_PI_PACKAGE_DIR, tails it live, keeps steer/stop controls, reports
+                         # working/done (OSC 7501) from the run's status.json and blocked while an
+                         # ask_user_question in the run is unanswered
 package/             # pi package bundled into pidr (prompt templates, skills)
   prompts/careful.md # /careful — cautious-mode prompt template
   prompts/comparative-research.md # /comparative-research — deep comparative research via the skill
@@ -201,6 +204,7 @@ without errors:
 - `extensions/pidr-splash.ts`;
 - `extensions/claude-bridge.ts`;
 - `extensions/pidr-mcp-kubernetes.ts`;
+- `extensions/pidr-herdr-needs-you.ts`;
 - `extensions/pidr-herdr-subagents/pidr-herdr-subagents.ts`;
 - `askuserquestion` (the patched copy pinned to a fixed GitHub revision);
 - `pi-subagents` (npm build from a GitHub release);

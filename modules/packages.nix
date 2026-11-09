@@ -94,6 +94,7 @@
         "${self}/extensions/pidr-splash.ts"
         "${self}/extensions/claude-bridge.ts"
         "${self}/extensions/pidr-mcp-kubernetes.ts"
+        "${self}/extensions/pidr-herdr-needs-you.ts"
         "${self}/extensions/pidr-herdr-subagents/pidr-herdr-subagents.ts"
         askuserquestion
         prompt-snippets

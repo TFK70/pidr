@@ -171,9 +171,12 @@ function encodeText(text, maxBytes) {
 
 let lastReport;
 
-/** Write the root OSC 7501 status — once at start, then only on change. */
+/** Write the root OSC 7501 status — once at start, then only on change.
+ *  A blocked report carries kind=question, the same shape pi's own
+ *  ProgramStatusReporter writes for a blocked program. */
 function report(state, title, msg) {
 	const pairs = ["state=" + state, "app=pi-subagents"];
+	if (state === "blocked") pairs.push("kind=question");
 	if (title !== undefined) pairs.push("title=" + encodeText(title, MAX_TITLE_BYTES));
 	if (msg !== undefined) pairs.push("msg=" + encodeText(msg, MAX_MSG_BYTES));
 	const payload = ESC + "]7501;" + pairs.join(":") + ESC + BS;
@@ -247,6 +250,10 @@ class TranscriptRenderer {
 		this.toolDefs = this.buildToolDefs(this.cwd);
 		this.blocks = []; // { component?: object, lines?: string[] }
 		this.pendingTools = new Map(); // toolCallId -> block
+		/** Open ask_user_question calls by tool call id -> question text (""
+		 *  when the call carries none). Drives the terminal's blocked status:
+		 *  a subagent waiting on the user must not read as working. */
+		this.questions = new Map();
 	}
 
 	/** Built-in tool renderers (native call/result/diff rendering) keyed by
@@ -283,6 +290,14 @@ class TranscriptRenderer {
 	reset() {
 		this.blocks = [];
 		this.pendingTools.clear();
+		this.questions.clear();
+	}
+
+	/** The first still-unanswered ask_user_question, or undefined when the
+	 *  agent is not waiting on the user. */
+	pendingQuestion() {
+		for (const question of this.questions.values()) return question;
+		return undefined;
 	}
 
 	push(component) {
@@ -349,11 +364,24 @@ class TranscriptRenderer {
 					);
 					const block = this.push(component);
 					this.pendingTools.set(content.id, block);
+					if (content.name === "ask_user_question") {
+						const args = isRecord(content.arguments) ? content.arguments : {};
+						const questions = Array.isArray(args.questions) ? args.questions : [];
+						let text = "";
+						for (const question of questions) {
+							if (isRecord(question) && typeof question.question === "string" && question.question.trim()) {
+								text = question.question.trim();
+								break;
+							}
+						}
+						this.questions.set(content.id, text);
+					}
 				}
 				return;
 			}
 			case "toolResult": {
 				const block = this.pendingTools.get(message.toolCallId);
+				this.questions.delete(message.toolCallId);
 				if (!block) return; // result without a call in this transcript
 				this.pendingTools.delete(message.toolCallId);
 				block.component.updateResult(message);
@@ -546,8 +574,9 @@ function stateToken(state) {
 	}
 }
 
-/** Build the run header lines from status.json. */
-function headerLines(theme, status, runId, index, sessionLive) {
+/** Build the run header lines from status.json. `needsYou` marks an
+ *  unanswered ask_user_question in the followed transcript. */
+function headerLines(theme, status, runId, index, sessionLive, needsYou) {
 	if (!status) {
 		return [
 			theme.fg("accent", theme.bold("pi-subagents")) + " " + theme.fg("dim", "run " + runId),
@@ -574,6 +603,7 @@ function headerLines(theme, status, runId, index, sessionLive) {
 	if (Number.isInteger(status.turnCount)) parts.push(theme.fg("dim", "turn " + status.turnCount));
 	const tool = currentTool(status);
 	if (tool) parts.push(theme.fg("warning", tool));
+	if (needsYou) parts.push(theme.fg("error", theme.bold("needs you")));
 	const detail = [theme.fg("dim", "run " + runId), theme.fg("dim", sessionLive ? "transcript live" : "transcript pending")];
 	return [parts.join(theme.fg("dim", " · ")), detail.join(theme.fg("dim", " · "))];
 }
@@ -610,16 +640,23 @@ const piPackageDir = args.get("--pi-package-dir") ?? process.env.PIDR_PI_PACKAGE
 const statusPath = join(asyncDir, "status.json");
 let lastStatus; // most recent status.json payload (also used by controls)
 
-/** Root OSC 7501 report from status.json (unchanged behavior). */
-function syncReport() {
-	const status = readStatus(statusPath, runId);
+/** Root OSC 7501 report from status.json (unchanged behavior), overridden to
+ *  `blocked` while the followed transcript has an unanswered
+ *  ask_user_question: a subagent waiting on the user must not read as
+ *  working in the herdr agents sidebar. */
+function reportFrom(status, blockedMessage) {
 	if (!status) {
 		// Start report before any status exists: the terminal is working.
 		if (lastReport === undefined) report("working", "subagent");
 		return undefined;
 	}
 	const state = oscState(status.state);
-	if (state !== undefined) report(state, agentName(status), currentTool(status));
+	if (state === undefined) return status;
+	if (state === "working" && blockedMessage !== undefined) {
+		report("blocked", agentName(status), blockedMessage || currentTool(status) || "ask_user_question");
+	} else {
+		report(state, agentName(status), currentTool(status));
+	}
 	return status;
 }
 
@@ -699,10 +736,10 @@ function handleControl(line) {
 // ---------------------------------------------------------------------------
 
 function runFallbackDashboard() {
-	syncReport();
+	reportFrom(readStatus(statusPath, runId));
 	const timer = setInterval(() => {
 		try {
-			syncReport();
+			reportFrom(readStatus(statusPath, runId));
 		} catch {
 			// polling must never kill the terminal
 		}
@@ -752,7 +789,8 @@ async function runNative(piModule) {
 
 	const paint = (force) => {
 		try {
-			const lines = [...headerLines(theme, lastStatus, runId, index, Boolean(followedFile)), ""];
+			const question = renderer.pendingQuestion();
+			const lines = [...headerLines(theme, lastStatus, runId, index, Boolean(followedFile), question !== undefined), ""];
 			const transcript = renderer.lines(width());
 			const visible = transcript.slice(-viewport());
 			if (transcript.length > visible.length) {
@@ -796,14 +834,16 @@ async function runNative(piModule) {
 
 	const tick = () => {
 		try {
-			lastStatus = syncReport();
-			if (lastStatus && typeof lastStatus.cwd === "string") renderer.setCwd(lastStatus.cwd);
-			const file = followedSessionFile(lastStatus, index);
+			const status = readStatus(statusPath, runId);
+			lastStatus = status;
+			if (status && typeof status.cwd === "string") renderer.setCwd(status.cwd);
+			const file = followedSessionFile(status, index);
 			if (file && file !== followedFile) {
 				followedFile = file;
 				if (tail.setFile(file)) renderer.reset();
 			}
 			for (const entry of tail.poll()) renderer.applyEntry(entry);
+			reportFrom(status, renderer.pendingQuestion());
 			paint(false);
 		} catch {
 			// polling must never kill the terminal
