@@ -32,6 +32,12 @@ package/             # pi package bundled into pidr (prompt templates, skills)
   prompts/careful.md # /careful — cautious-mode prompt template
   prompts/comparative-research.md # /comparative-research — deep comparative research via the skill
   skills/comparative-research/SKILL.md # bundled skill: deep comparative research workflow
+  skills/grill/SKILL.md # /skill:grill — user-invoked decision-tree interview (ported from mattpocock/skills, MIT)
+  skills/handoff/SKILL.md # /skill:handoff — user-invoked context handoff doc for the next session (ditto)
+  skills/retro/SKILL.md # /skill:retro — user-invoked session retrospective on the agent environment (ditto)
+  skills/pi-session-format/SKILL.md # model-invoked reference for parsing pi session JSONL transcripts (used by retro/handoff)
+  skills/writing-for-agents/ # model-invoked writing style guide for agent docs (SKILL.md + SKILL-MECHANICS.md, ditto;
+                     # used by /skill:retro; pinned upstream rev 4ae2317ddb22)
 snippets/            # prompt snippets ported from amosblomqvist/pi-config, overlaid
                      # onto the fetched prompt-snippets extension in modules/packages.nix
 modules/patches/     # Nix patches for extensions fetched from upstream repos
@@ -213,7 +219,8 @@ without errors:
 - `extensions/pidr-herdr-subagents/pidr-herdr-subagents.ts`;
 - `askuserquestion` (the patched copy pinned to a fixed GitHub revision);
 - `pi-subagents` (npm build from a GitHub release);
-- `package/` (prompt templates).
+- `package/` (prompt templates, skills: comparative-research, grill, handoff, retro,
+  writing-for-agents).
 
 The actual list of loaded packages is checked interactively: start
 `result/bin/pi` — pidr-splash lists the active extensions and MCP servers
