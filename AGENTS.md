@@ -36,6 +36,8 @@ package/             # pi package bundled into pidr (prompt templates, skills)
   skills/handoff/SKILL.md # /skill:handoff — user-invoked context handoff doc for the next session (ditto)
   skills/retro/SKILL.md # /skill:retro — user-invoked session retrospective on the agent environment (ditto)
   skills/pi-session-format/SKILL.md # model-invoked reference for parsing pi session JSONL transcripts (used by retro/handoff)
+  skills/teach/ # /skill:teach — user-invoked multi-session teaching workspace: lessons, missions, learning
+                     # records (SKILL.md + 4 *-FORMAT.md; ported from mattpocock/skills, MIT, rev 4ae2317ddb22)
   skills/writing-for-agents/ # model-invoked writing style guide for agent docs (SKILL.md + SKILL-MECHANICS.md, ditto;
                      # used by /skill:retro; pinned upstream rev 4ae2317ddb22)
 snippets/            # prompt snippets ported from amosblomqvist/pi-config, overlaid
