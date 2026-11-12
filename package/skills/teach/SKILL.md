@@ -60,6 +60,8 @@ Each lesson should recommend a primary source for the user to read or watch. Thi
 
 Each lesson should contain a reminder to ask followup questions to the agent. The agent is their teacher, and can assist with anything that's unclear.
 
+When revising an already-generated lesson, visibly highlight every change in the HTML itself: wrap inserted or rewritten passages in `<mark>`, and note removed content where it matters. Re-opening the file must show at a glance what changed since the last read; tell the user to refresh the page. Keep highlights until the user confirms they've seen them, then strip them on the next revision.
+
 ## Assets
 
 Lessons are built from reusable **components**, stored in `./assets/`: stylesheets, quiz widgets, simulators, diagram helpers, and anything else a second lesson could reuse.
