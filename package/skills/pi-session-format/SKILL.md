@@ -1,6 +1,6 @@
 ---
 name: pi-session-format
-description: Reference for reading pi session transcripts (JSONL under ~/.pi/agent/sessions): entry types, the id/parentId tree, message roles and content blocks, toolCall structure. Use when parsing session files (retrospectives, handoffs, analytics, branching analysis).
+description: "Reference for reading pi session transcripts (JSONL under ~/.pi/agent/sessions): entry types, the id/parentId tree, message roles and content blocks, toolCall structure. Use when parsing session files (retrospectives, handoffs, analytics, branching analysis)."
 ---
 
 # Pi session file format
