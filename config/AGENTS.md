@@ -8,3 +8,4 @@
 - Ask user confirmation before destructive operations (file deletion, force-push, etc.) via `ask_user_question`
 - Start implementing only when you are confident in the facts your plan depends on.
 - Any write operations inside `~/.pi` are FORBIDDEN without explicit user confirmation (via `ask_user_question`). Read-only operations on `~/.pi` are allowed.
+- Never write comments in code without user's permission
